@@ -9,6 +9,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   download-and-upload:
     runs-on: ubuntu-latest
@@ -17,7 +20,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.TOKEN }}
 
       - name: Install dependencies
         run: |
@@ -64,8 +67,29 @@ jobs:
           if [ -z "$first_link" ]; then
             echo "mega_download_list.txt is empty, exiting"
             exit 0
-          fi
+          fi   fi
           echo "Processing $first_link"
+          # Send pre-download notification
+          curl -X POST -H "Content-Type: application/json" -d @- $DISCORD_WEBHOOK_URL <<EOF
+{
+  "embeds": [{
+    "title": "📥 Starting Mega Download",
+    "fields": [
+      {
+        "name": "Mega Link",
+        "value": "[Mega Link]($first_link)",
+        "inline": true
+      },
+      {
+        "name": "Started At",
+        "value": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+        "inline": true
+      }
+    ],
+    "color": 5814783
+  }]
+}
+EOF
           rm -rf downloads/*
           success=true
           if ! mega-get "$first_link" downloads/; then
@@ -89,29 +113,31 @@ jobs:
             done
             if [ "$success" = true ]; then
               for url in "${gofile_urls[@]}"; do
-                curl -X POST -H "Content-Type: application/json" -d '{
-                  "embeds": [{
-                    "title": "📤 File Uploaded to Gofile!",
-                    "fields": [
-                      {
-                        "name": "Download Link",
-                        "value": "[Download from Gofile]('"$url"')",
-                        "inline": true
-                      },
-                      {
-                        "name": "Source Mega Link",
-                        "value": "[Mega Link]('"$first_link"')",
-                        "inline": true
-                      },
-                      {
-                        "name": "Uploaded At",
-                        "value": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
-                        "inline": true
-                      }
-                    ],
-                    "color": 5814783
-                  }]
-                }' $DISCORD_WEBHOOK_URL
+                curl -X POST -H "Content-Type: application/json" -d @- $DISCORD_WEBHOOK_URL <<EOF
+{
+  "embeds": [{
+    "title": "📤 File Uploaded to Gofile!",
+    "fields": [
+      {
+        "name": "Download Link",
+        "value": "[Download from Gofile]($url)",
+        "inline": true
+      },
+      {
+        "name": "Source Mega Link",
+        "value": "[Mega Link]($first_link)",
+        "inline": true
+      },
+      {
+        "name": "Uploaded At",
+        "value": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+        "inline": true
+      }
+    ],
+    "color": 5814783
+  }]
+}
+EOF
               done
             fi
           fi
