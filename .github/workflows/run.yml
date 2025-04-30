@@ -26,7 +26,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq wget gnupg
-          # Add Mega's APT repository
           wget -q -O - https://mega.nz/linux/repo/xUbuntu_24.04/Release.key | sudo apt-key add -
           echo "deb https://mega.nz/linux/repo/xUbuntu_24.04/ ./" | sudo tee /etc/apt/sources.list.d/mega.list
           sudo apt-get update
@@ -63,35 +62,31 @@ jobs:
             echo "No mega_download_list.txt found, exiting"
             exit 0
           fi
+
           first_link=$(head -n 1 mega_download_list.txt)
           if [ -z "$first_link" ]; then
             echo "mega_download_list.txt is empty, exiting"
             exit 0
           fi
+
           echo "Processing $first_link"
-          # Send pre-download notification
-          curl -X POST -H "Content-Type: application/json" -d @- $DISCORD_WEBHOOK_URL <<EOF
-          {
-            "embeds": [{
-              "title": "📥 Starting Mega Download",
-              "fields": [
-                {
-                  "name": "Mega Link",
-                  "value": "[Mega Link]($first_link)",
-                  "inline": true
-                },
-                {
-                  "name": "Started At",
-                  "value": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-                  "inline": true
-                }
+
+          start_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          start_payload=$(jq -n --arg link "$first_link" --arg time "$start_time" '{
+            embeds: [{
+              title: "📥 Starting Mega Download",
+              fields: [
+                { name: "Mega Link", value: "[Mega Link](\($link))", inline: true },
+                { name: "Started At", value: $time, inline: true }
               ],
-              "color": 5814783
+              color: 5814783
             }]
-          }
-          EOF
+          }')
+          curl -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
+
           rm -rf downloads/*
           success=true
+
           if ! mega-get "$first_link" downloads/; then
             echo "Failed to download $first_link"
             success=false
@@ -111,39 +106,27 @@ jobs:
                 rm -f "$file"
               fi
             done
+
             if [ "$success" = true ]; then
               for url in "${gofile_urls[@]}"; do
-                curl -X POST -H "Content-Type: application/json" -d @- $DISCORD_WEBHOOK_URL <<EOF
-                {
-                  "embeds": [{
-                    "title": "📤 File Uploaded to Gofile!",
-                    "fields": [
-                      {
-                        "name": "Download Link",
-                        "value": "[Download from Gofile]($url)",
-                        "inline": true
-                      },
-                      {
-                        "name": "Source Mega Link",
-                        "value": "[Mega Link]($first_link)",
-                        "inline": true
-                      },
-                      {
-                        "name": "Uploaded At",
-                        "value": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-                        "inline": true
-                      }
+                upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+                upload_payload=$(jq -n --arg url "$url" --arg link "$first_link" --arg time "$upload_time" '{
+                  embeds: [{
+                    title: "📤 File Uploaded to Gofile!",
+                    fields: [
+                      { name: "Download Link", value: "[Download from Gofile](\($url))", inline: true },
+                      { name: "Source Mega Link", value: "[Mega Link](\($link))", inline: true },
+                      { name: "Uploaded At", value: $time, inline: true }
                     ],
-                    "color": 5814783
+                    color: 5814783
                   }]
-                }
-                EOF
+                }')
+                curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
               done
             fi
           fi
-          # Update mega_download_list.txt
+
           if [ "$success" = true ]; then
-            # Remove first line, keep the rest
             tail -n +2 mega_download_list.txt > temp.txt
             mv temp.txt mega_download_list.txt
             git config user.name "GitHub Actions"
