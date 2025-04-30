@@ -17,13 +17,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq
-          sudo snap install mega-cmd
+          sudo apt-get install -y jq wget
+          # Install mega-cmd via .deb package
+          wget https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
+          sudo dpkg -i megacmd-xUbuntu_22.04_amd64.deb
+          sudo apt-get install -f -y
+
+      - name: Debug mega-cmd installation
+        run: |
+          echo "Checking mega-cmd installation..."
+          which mega-get || echo "mega-get not found"
+          mega-get --version || echo "mega-get version check failed"
+          ls -l /usr/bin/mega-*
 
       - name: Create downloads directory
         run: mkdir -p downloads
@@ -31,7 +41,7 @@ jobs:
       - name: Get Gofile server
         id: gofile_server
         run: |
-          response=$(curl -s https://api.gofile.io/servers)
+          response=$(curl -s https://api.gofile.io/getServer)
           echo "Raw Gofile API response: $response"
           if echo "$response" | jq -e '.data.server' > /dev/null 2>&1; then
             server=$(echo "$response" | jq -r '.data.server')
@@ -41,7 +51,7 @@ jobs:
             echo "server=store1" >> $GITHUB_ENV
           fi
 
-      - name: Process Mega Links
+      - name: Process First Mega Link
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
@@ -49,17 +59,18 @@ jobs:
             echo "No mega_download_list.txt found, exiting"
             exit 0
           fi
-          mapfile -t all_links < mega_download_list.txt
-          failed_links=()
-          for link in "${all_links[@]}"; do
-            echo "Processing $link"
-            rm -rf downloads/*
-            if ! mega-get "$link" downloads/; then
-              echo "Failed to download $link"
-              failed_links+=("$link")
-              continue
-            fi
-            uploaded=true
+          first_link=$(head -n 1 mega_download_list.txt)
+          if [ -z "$first_link" ]; then
+            echo "mega_download_list.txt is empty, exiting"
+            exit 0
+          fi
+          echo "Processing $first_link"
+          rm -rf downloads/*
+          success=true
+          if ! mega-get "$first_link" downloads/; then
+            echo "Failed to download $first_link"
+            success=false
+          else
             gofile_urls=()
             for file in downloads/*; do
               if [ -f "$file" ]; then
@@ -70,12 +81,12 @@ jobs:
                   gofile_urls+=("$gofile_url")
                 else
                   echo "Failed to upload $file"
-                  uploaded=false
+                  success=false
                 fi
                 rm -f "$file"
               fi
             done
-            if [ "$uploaded" = true ]; then
+            if [ "$success" = true ]; then
               for url in "${gofile_urls[@]}"; do
                 curl -X POST -H "Content-Type: application/json" -d '{
                   "embeds": [{
@@ -88,7 +99,7 @@ jobs:
                       },
                       {
                         "name": "Source Mega Link",
-                        "value": "[Mega Link]('"$link"')",
+                        "value": "[Mega Link]('"$first_link"')",
                         "inline": true
                       },
                       {
@@ -101,18 +112,28 @@ jobs:
                   }]
                 }' $DISCORD_WEBHOOK_URL
               done
-            else
-              echo "Upload failed for $link"
-              failed_links+=("$link")
             fi
-          done
-          printf "%s\n" "${failed_links[@]}" > mega_download_list.txt
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-          git add mega_download_list.txt
-          if [ ${#failed_links[@]} -eq 0 ]; then
-            git commit -m "All links processed successfully"
-          else
-            git commit -m "Updated mega_download_list.txt with failed links"
           fi
-          git push
+          # Update mega_download_list.txt
+          if [ "$success" = true ]; then
+            # Remove first line, keep the rest
+            tail -n +2 mega_download_list.txt > temp.txt
+            mv temp.txt mega_download_list.txt
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git add mega_download_list.txt
+            if [ -s mega_download_list.txt ]; then
+              git commit -m "Processed first link, removed from mega_download_list.txt"
+            else
+              git commit -m "Processed last link, mega_download_list.txt is now empty"
+            fi
+            git push
+          else
+            echo "First link failed, keeping mega_download_list.txt unchanged"
+            # Optionally commit to log failure
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git add mega_download_list.txt
+            git commit -m "Failed to process first link: $first_link"
+            git push
+          fi
