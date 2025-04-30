@@ -44,7 +44,7 @@ jobs:
       - name: Get Gofile server
         id: gofile_server
         run: |
-          response=$(curl -s https://api.gofile.io/getServer)
+          response=$(curl -s https://api.gofile.io/servers)
           echo "Raw Gofile API response: $response"
           if echo "$response" | jq -e '.data.server' > /dev/null 2>&1; then
             server=$(echo "$response" | jq -r '.data.server')
