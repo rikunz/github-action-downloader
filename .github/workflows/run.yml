@@ -1,0 +1,91 @@
+name: Mega Download and Upload to Gofile with Notifications
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  download-and-upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          sudo snap install mega-cmd
+
+      - name: Create downloads directory
+        run: mkdir -p downloads
+
+      - name: Get Gofile server
+        id: gofile_server
+        run: |
+          server=$(curl -s https://api.gofile.io/getServer | jq -r '.data.server')
+          echo "server=$server" >> $GITHUB_ENV
+
+      - name: Process Mega Links
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
+          MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
+        run: |
+          if [ ! -f mega_download_list.txt ]; then
+            echo "No mega_download_list.txt found, exiting"
+            exit 0
+          fi
+          mapfile -t all_links < mega_download_list.txt
+          failed_links=()
+          for link in "${all_links[@]}"; do
+            echo "Processing $link"
+            rm -rf downloads/*
+            if ! mega-get "$link" downloads/; then
+              echo "Failed to download $link"
+              failed_links+=("$link")
+              continue
+            fi
+            uploaded=true
+            gofile_urls=()
+            for file in downloads/*; do
+              if [ -f "$file" ]; then
+                echo "Uploading $file to Gofile"
+                gofile_response=$(curl -s -F "file=@$file" https://${{ env.server }}.gofile.io/uploadFile)
+                if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
+                  gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
+                  gofile_urls+=("$gofile_url")
+                else
+                  echo "Failed to upload $file"
+                  uploaded=false
+                fi
+                rm -f "$file"
+              fi
+            done
+            if [ "$uploaded" = true ]; then
+              for url in "${gofile_urls[@]}"; do
+                curl -X POST -H "Content-Type: application/json" -d "{\"content\": \"Uploaded to Gofile: $url\"}" $DISCORD_WEBHOOK_URL
+              done
+            else
+              echo "Upload failed for $link"
+              failed_links+=("$link")
+            fi
+          done
+          printf "%s\n" "${failed_links[@]}" > mega_download_list.txt
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add mega_download_list.txt
+          if [ ${#failed_links[@]} -eq 0 ]; then
+            git commit -m "All links processed successfully"
+          else
+            git commit -m "Updated mega_download_list.txt with failed links"
+          fi
+          git push
