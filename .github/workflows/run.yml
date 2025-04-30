@@ -22,11 +22,12 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq wget
-          # Install mega-cmd via .deb package
-          wget https://mega.nz/linux/repo/xUbuntu_22.04/amd64/megacmd-xUbuntu_22.04_amd64.deb
-          sudo dpkg -i megacmd-xUbuntu_22.04_amd64.deb
-          sudo apt-get install -f -y
+          sudo apt-get install -y jq wget gnupg
+          # Add Mega's APT repository
+          wget -q -O - https://mega.nz/linux/repo/xUbuntu_24.04/Release.key | sudo apt-key add -
+          echo "deb https://mega.nz/linux/repo/xUbuntu_24.04/ ./" | sudo tee /etc/apt/sources.list.d/mega.list
+          sudo apt-get update
+          sudo apt-get install -y megacmd
 
       - name: Debug mega-cmd installation
         run: |
@@ -130,7 +131,6 @@ jobs:
             git push
           else
             echo "First link failed, keeping mega_download_list.txt unchanged"
-            # Optionally commit to log failure
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add mega_download_list.txt
