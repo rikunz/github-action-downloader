@@ -93,7 +93,7 @@ jobs:
 
           echo "Monitoring download progress..."
           download_complete=false
-          timeout=1800
+          timeout=18000
           elapsed=0
           min_size=1048576
           while [ $elapsed -lt $timeout ]; do
