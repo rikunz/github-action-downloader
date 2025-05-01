@@ -1,4 +1,3 @@
-```yaml
 name: 1fichier Download and Upload to Gofile with Notifications
 
 on:
@@ -399,4 +398,3 @@ jobs:
 
           # Clean up
           rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt debug_get.html debug_post.html
-```
