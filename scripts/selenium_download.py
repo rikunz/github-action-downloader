@@ -2,6 +2,8 @@ import time
 import sys
 import os
 import logging
+import tempfile
+import shutil
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -17,33 +19,68 @@ def setup_logging():
         level=logging.DEBUG,
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
-    return logging.getLogger()
+    logger = logging.getLogger()
+    logger.info("Logging initialized")
+    return logger
 
 def clean_chrome_processes():
     """Kill any existing Chrome and ChromeDriver processes aggressively."""
     logger = setup_logging()
     try:
-        os.system("ps aux | grep -E 'chromedriver|chromium' > chrome_processes.log")
-        logger.info("Logged running Chrome processes to chrome_processes.log")
-        os.system("killall -9 chromedriver >/dev/null 2>&1 || true")
-        os.system("killall -9 chromium >/dev/null 2>&1 || true")
-        time.sleep(1)
-        logger.info("Cleaned up existing Chrome and ChromeDriver processes")
+        # Log proses yang berjalan sebelum pembersihan
+        logger.info("Checking running Chrome processes before cleanup")
+        os.system("ps aux | grep -E 'chromedriver|chromium' > chrome_processes_before.log")
+        print("Saved running processes to chrome_processes_before.log")
+
+        # Hentikan proses chromedriver dan chromium
+        os.system("pkill -9 -f chromedriver >/dev/null 2>&1 || true")
+        os.system("pkill -9 -f chromium >/dev/null 2>&1 || true")
+        time.sleep(2)  # Beri waktu untuk proses dihentikan
+
+        # Hapus direktori data pengguna sementara
+        temp_dirs = [d for d in os.listdir('/tmp') if d.startswith('.com.google.Chrome') or d.startswith('chrome-user-data')]
+        for temp_dir in temp_dirs:
+            try:
+                shutil.rmtree(os.path.join('/tmp', temp_dir))
+                logger.info(f"Removed temporary Chrome data directory: /tmp/{temp_dir}")
+                print(f"Removed temporary Chrome data directory: /tmp/{temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to remove /tmp/{temp_dir}: {str(e)}")
+                print(f"Warning: Failed to remove /tmp/{temp_dir}: {str(e)}")
+
+        # Log proses setelah pembersihan
+        os.system("ps aux | grep -E 'chromedriver|chromium' > chrome_processes_after.log")
+        logger.info("Logged running Chrome processes to chrome_processes_after.log")
+        print("Saved running processes to chrome_processes_after.log")
     except Exception as e:
         logger.warning(f"Failed to clean Chrome processes: {str(e)}")
+        print(f"Warning: Failed to clean Chrome processes: {str(e)}")
 
 def trigger_1fichier_download(url, download_dir):
     logger = setup_logging()
+    logger.info(f"Starting download for URL: {url}, Download dir: {download_dir}")
+    print(f"Starting download for URL: {url}, Download dir: {download_dir}")
+
     try:
+        # Pastikan direktori ada dan memiliki izin menulis
         if not os.path.exists(download_dir):
-            os.makedirs(download_dir)
+            os.makedirs(download_dir, mode=0o777)
             logger.info(f"Created download directory: {download_dir}")
+            print(f"Created download directory: {download_dir}")
         if not os.access(download_dir, os.W_OK):
             logger.error(f"No write permission for {download_dir}")
             print(f"Error: No write permission for {download_dir}. Please check directory permissions.")
             return False
+        os.chmod(download_dir, 0o777)
+        logger.info(f"Set permissions to 777 for {download_dir}")
+        print(f"Set permissions to 777 for {download_dir}")
 
         clean_chrome_processes()
+
+        # Buat direktori sementara untuk user-data-dir
+        user_data_dir = tempfile.mkdtemp(prefix="chrome-user-data-")
+        logger.info(f"Using temporary user data directory: {user_data_dir}")
+        print(f"Using temporary user data directory: {user_data_dir}")
 
         chrome_options = Options()
         chrome_options.page_load_strategy = 'normal'
@@ -51,7 +88,8 @@ def trigger_1fichier_download(url, download_dir):
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-popup-blocking")
         chrome_options.add_argument("--disable-notifications")
-        # chrome_options.add_argument("--headless=new")  # Dihapus untuk menghindari deteksi bot
+        # chrome_options.add_argument("--headless=new")  # Non-headless untuk menghindari deteksi bot
+        chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         chrome_options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
@@ -65,8 +103,11 @@ def trigger_1fichier_download(url, download_dir):
 
         try:
             service = Service('/usr/bin/chromedriver', log_path="chromedriver.log")
+            logger.info("Attempting to initialize ChromeDriver")
+            print("Attempting to initialize ChromeDriver")
             driver = webdriver.Chrome(service=service, options=chrome_options)
             logger.info("Initialized ChromeDriver")
+            print("Initialized ChromeDriver")
             # Verifikasi direktori unduhan
             prefs = driver.execute_script("return window.chrome.prefs")
             actual_download_dir = prefs.get('download', {}).get('default_directory', 'Unknown')
@@ -75,10 +116,22 @@ def trigger_1fichier_download(url, download_dir):
             if actual_download_dir != download_dir:
                 print(f"Warning: Download directory mismatch! Expected {download_dir}, got {actual_download_dir}")
                 logger.warning(f"Download directory mismatch: Expected {download_dir}, got {actual_download_dir}")
+            # Ambil screenshot awal
+            try:
+                driver.save_screenshot("initial_screenshot.png")
+                print("Saved initial screenshot to initial_screenshot.png")
+                logger.info("Saved initial screenshot to initial_screenshot.png")
+            except Exception as e:
+                print(f"Failed to save initial screenshot: {str(e)}")
+                logger.error(f"Failed to save initial screenshot: {str(e)}")
         except WebDriverException as e:
             logger.error(f"Error initializing ChromeDriver: {str(e)}")
             print(f"Error initializing ChromeDriver: {str(e)}")
             print("Ensure ChromeDriver version matches Chrome browser version.")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error during ChromeDriver initialization: {str(e)}")
+            print(f"Unexpected error during ChromeDriver initialization: {str(e)}")
             return False
 
         try:
@@ -124,6 +177,13 @@ def trigger_1fichier_download(url, download_dir):
                 with open("debug_page.html", "w", encoding="utf-8") as f:
                     f.write(driver.page_source)
                 print("Saved page source to debug_page.html for inspection")
+                try:
+                    driver.save_screenshot("debug_screenshot.png")
+                    print("Saved debug screenshot to debug_screenshot.png")
+                    logger.info("Saved debug screenshot to debug_screenshot.png")
+                except Exception as e:
+                    print(f"Failed to save debug screenshot: {str(e)}")
+                    logger.error(f"Failed to save debug screenshot: {str(e)}")
                 return False
 
             print("Checking for ad overlays...")
@@ -168,6 +228,13 @@ def trigger_1fichier_download(url, download_dir):
                 with open("debug_page.html", "w", encoding="utf-8") as f:
                     f.write(driver.page_source)
                 print("Saved page source to debug_page.html for inspection")
+                try:
+                    driver.save_screenshot("debug_screenshot.png")
+                    print("Saved debug screenshot to debug_screenshot.png")
+                    logger.info("Saved debug screenshot to debug_screenshot.png")
+                except Exception as e:
+                    print(f"Failed to save debug screenshot: {str(e)}")
+                    logger.error(f"Failed to save debug screenshot: {str(e)}")
                 return False
 
             print("Waiting for download to initiate...")
@@ -189,14 +256,14 @@ def trigger_1fichier_download(url, download_dir):
             with open("final_page.html", "w", encoding="utf-8") as f:
                 f.write(driver.page_source)
             print("Saved final page source to final_page.html for inspection")
-            # Ambil screenshot
+            # Ambil screenshot akhir
             try:
                 driver.save_screenshot("final_screenshot.png")
-                print("Saved screenshot to final_screenshot.png")
-                logger.info("Saved screenshot to final_screenshot.png")
+                print("Saved final screenshot to final_screenshot.png")
+                logger.info("Saved final screenshot to final_screenshot.png")
             except Exception as e:
-                print(f"Failed to save screenshot: {str(e)}")
-                logger.error(f"Failed to save screenshot: {str(e)}")
+                print(f"Failed to save final screenshot: {str(e)}")
+                logger.error(f"Failed to save final screenshot: {str(e)}")
 
             return True
 
@@ -209,6 +276,13 @@ def trigger_1fichier_download(url, download_dir):
                 with open("debug_page.html", "w", encoding="utf-8") as f:
                     f.write(driver.page_source)
                 print("Saved page source to debug_page.html for inspection")
+                try:
+                    driver.save_screenshot("debug_screenshot.png")
+                    print("Saved debug screenshot to debug_screenshot.png")
+                    logger.info("Saved debug screenshot to debug_screenshot.png")
+                except Exception as e:
+                    print(f"Failed to save debug screenshot: {str(e)}")
+                    logger.error(f"Failed to save debug screenshot: {str(e)}")
             return False
 
         finally:
@@ -229,5 +303,7 @@ if __name__ == "__main__":
     success = trigger_1fichier_download(url, download_dir)
     if success:
         print("Download triggered successfully!")
+        sys.exit(0)
     else:
         print("Failed to trigger download.")
+        sys.exit(1)

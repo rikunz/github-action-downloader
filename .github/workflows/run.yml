@@ -29,15 +29,22 @@ jobs:
           pip install requests beautifulsoup4 selenium
           chromium-browser --version
           chromedriver --version
+          which chromedriver
+          ls -l /usr/bin/chromedriver
 
       - name: Process First 1fichier Link
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           echo "Cleaning up existing Chrome processes..."
-          killall -9 chromedriver >/dev/null 2>&1 || true
-          killall -9 chromium >/dev/null 2>&1 || true
-          sleep 1
+          pkill -9 -f chromedriver >/dev/null 2>&1 || true
+          pkill -9 -f chromium >/dev/null 2>&1 || true
+          sleep 2
+          # Hapus direktori data pengguna sementara
+          find /tmp -maxdepth 1 -type d -name '.com.google.Chrome*' -exec rm -rf {} + 2>/dev/null || true
+          find /tmp -maxdepth 1 -type d -name 'chrome-user-data*' -exec rm -rf {} + 2>/dev/null || true
+          ps aux | grep -E 'chromedriver|chromium' > chrome_processes_initial.log || true
+          echo "Saved initial Chrome processes to chrome_processes_initial.log"
 
           if [ ! -f fichier_download_list.txt ]; then
             echo "No fichier_download_list.txt found, exiting"
@@ -67,6 +74,7 @@ jobs:
 
           link=$(echo "$first_link" | awk -F'&af=' '{print $1}' | tr -d '\r\n')
           temp_dir=$(mktemp -d)
+          echo "Temporary directory: $temp_dir"
 
           echo "Starting download with Selenium..."
           python scripts/selenium_download.py "$link" "$temp_dir" > selenium_output.txt 2>&1
@@ -79,7 +87,7 @@ jobs:
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
                 title: "❌ Failed to Trigger Download from 1fichier",
-                description: "Link: \($link)\nCheck logs for details",
+                description: "Link: \($link)\nCheck logs, screenshots, and debug files for details",
                 color: 16711680
               }]
             }')
@@ -187,14 +195,18 @@ jobs:
             cat selenium_output.txt
             if [ -f debug_page.html ]; then echo "Saved debug_page.html"; fi
             if [ -f final_page.html ]; then echo "Saved final_page.html"; fi
+            if [ -f initial_screenshot.png ]; then echo "Saved initial_screenshot.png"; fi
+            if [ -f debug_screenshot.png ]; then echo "Saved debug_screenshot.png"; fi
             if [ -f final_screenshot.png ]; then echo "Saved final_screenshot.png"; fi
             if [ -f selenium_download.log ]; then echo "Saved selenium_download.log"; fi
             if [ -f chromedriver.log ]; then echo "Saved chromedriver.log"; fi
-            if [ -f chrome_processes.log ]; then echo "Saved chrome_processes.log"; fi
+            if [ -f chrome_processes_before.log ]; then echo "Saved chrome_processes_before.log"; fi
+            if [ -f chrome_processes_after.log ]; then echo "Saved chrome_processes_after.log"; fi
+            if [ -f chrome_processes_initial.log ]; then echo "Saved chrome_processes_initial.log"; fi
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
                 title: "❌ Failed to Download from 1fichier",
-                description: "Link: \($link)\nCheck logs, final_page.html, and final_screenshot.png for details",
+                description: "Link: \($link)\nCheck logs, screenshots, and debug files for details",
                 color: 16711680
               }]
             }')
@@ -217,7 +229,12 @@ jobs:
           path: |
             debug_page.html
             final_page.html
+            initial_screenshot.png
+            debug_screenshot.png
             final_screenshot.png
             selenium_download.log
             chromedriver.log
-            chrome_processes.log
+            chrome_processes_before.log
+            chrome_processes_after.log
+            chrome_processes_initial.log
+          if-no-files-found: warn
