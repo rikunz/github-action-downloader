@@ -46,13 +46,24 @@ jobs:
         run: |
           response=$(curl -s https://api.gofile.io/servers)
           echo "Raw Gofile API response: $response"
-          if echo "$response" | jq -e '.data.server' > /dev/null 2>&1; then
-            server=$(echo "$response" | jq -r '.data.server')
-            echo "server=$server" >> $GITHUB_ENV
+
+          preferred_zones='["asia", "eu", "na"]'
+          server="store1"
+
+          if echo "$response" | jq -e '.data.serversAllZone' > /dev/null 2>&1; then
+            for zone in $(echo $preferred_zones | jq -r '.[]'); do
+              candidate=$(echo "$response" | jq -r --arg zone "$zone" '.data.serversAllZone[] | select(.zone == $zone) | .name' | head -n 1)
+              if [ -n "$candidate" ]; then
+                server="$candidate"
+                break
+              fi
+            done
+            echo "Selected server based on preferred zone: $server"
           else
-            echo "Failed to get Gofile server, using fallback: store1"
-            echo "server=store1" >> $GITHUB_ENV
+            echo "Failed to get valid servers list, using fallback: $server"
           fi
+
+          echo "server=$server" >> $GITHUB_ENV
 
       - name: Process First Mega Link
         env:
@@ -90,6 +101,19 @@ jobs:
           if ! mega-get "$first_link" downloads/; then
             echo "Failed to download $first_link"
             success=false
+            # Kirim notifikasi ke Discord kalau gagal
+            error_message=$(<mega_error.log)
+            error_payload=$(jq -n \
+              --arg link "$first_link" \
+              --arg error "$error_message" '{
+                embeds: [{
+                  title: "❌ Failed to Download from Mega",
+                  description: "Link: \($link)\nError:\n```bash\n\($error)\n```",
+                  color: 16711680
+                }]
+              }')
+            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+            
           else
             gofile_urls=()
             for file in downloads/*; do
@@ -107,12 +131,25 @@ jobs:
               fi
             done
 
-            if [ "$success" = true ]; then
-              for url in "${gofile_urls[@]}"; do
-                upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-                upload_payload=$(jq -n --arg url "$url" --arg link "$first_link" --arg time "$upload_time" '{
+          if [ "$success" = true ]; then
+            for url in "${gofile_urls[@]}"; do
+              upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          
+              # Buat list file yang diunduh
+              file_list=""
+              for file in downloads/*; do
+                [ -f "$file" ] && file_list="${file_list}• $(basename "$file")\n"
+              done
+              file_list=${file_list%\\n}  # Hapus newline terakhir
+          
+              upload_payload=$(jq -n \
+                --arg url "$url" \
+                --arg link "$first_link" \
+                --arg time "$upload_time" \
+                --arg files "$file_list" '{
                   embeds: [{
                     title: "📤 File Uploaded to Gofile!",
+                    description: "Downloaded files:\n\($files)",
                     fields: [
                       { name: "Download Link", value: "[Download from Gofile](\($url))", inline: true },
                       { name: "Source Mega Link", value: "[Mega Link](\($link))", inline: true },
@@ -121,11 +158,11 @@ jobs:
                     color: 5814783
                   }]
                 }')
-                curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
-              done
-            fi
+          
+              curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
+            done
           fi
-
+          
           if [ "$success" = true ]; then
             tail -n +2 mega_download_list.txt > temp.txt
             mv temp.txt mega_download_list.txt
