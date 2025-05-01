@@ -105,7 +105,6 @@ jobs:
           import uuid
           import base64
           import os
-          import urllib.parse
 
           def extract_1fichier_url(url):
               try:
@@ -131,7 +130,6 @@ jobs:
                   response = session.get(url, allow_redirects=True)
                   if response.status_code != 200:
                       print(f"Failed to access URL: Status {response.status_code}")
-                      # Save HTML for debugging
                       with open("debug_get.html", "w", encoding="utf-8") as f:
                           f.write(response.text)
                       return None, None, None, None
@@ -154,12 +152,10 @@ jobs:
                       return None, None, None, None
                   filename = filename_elements[1].text.strip()
 
-                  # Try to extract cookies from HTML (e.g., in <script> tags or inputs)
+                  # Try to extract cookies from HTML or response
                   cookies = {}
                   html_content = str(soup)
-                  # Search for _sharedID (UUID format)
                   shared_id_match = re.search(r'_sharedID\s*[:=]\s*[\'"]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\'"]', html_content, re.IGNORECASE)
-                  # Search for _sharedID_cst (base64-like string)
                   cst_match = re.search(r'_sharedID_cst\s*[:=]\s*[\'"]([A-Za-z0-9+/=]+)[\'"]', html_content, re.IGNORECASE)
 
                   if shared_id_match:
@@ -177,7 +173,6 @@ jobs:
                   if not cookies:
                       print("No cookies found in HTML or response, generating mock cookies")
                       cookies['_sharedID'] = str(uuid.uuid4())
-                      # Generate a random 8-byte string and encode in base64
                       random_bytes = os.urandom(8)
                       cookies['_sharedID_cst'] = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
 
@@ -188,7 +183,6 @@ jobs:
                   post_response = session.post(url, data=data, allow_redirects=True)
                   if post_response.status_code != 200:
                       print(f"POST request failed: Status {post_response.status_code}")
-                      # Save HTML for debugging
                       with open("debug_post.html", "w", encoding="utf-8") as f:
                           f.write(post_response.text)
                       return None, None, None, None
@@ -210,27 +204,26 @@ jobs:
                       print("Could not find download URL")
                       return None, None, None, None
 
-                  # Define headers for curl (based on provided sample)
-                  headers = {
-                      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                      "Accept-Encoding": "gzip, deflate, br, zstd",
-                      "Accept-Language": "en-US,en;q=0.9",
-                      "Connection": "keep-alive",
-                      "Cookie": cookies_str,
-                      "Referer": "https://1fichier.com/",
-                      "sec-ch-ua": '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
-                      "sec-ch-ua-mobile": "?0",
-                      "sec-ch-ua-platform": '"Windows"',
-                      "Sec-Fetch-Dest": "document",
-                      "Sec-Fetch-Mode": "navigate",
-                      "Sec-Fetch-Site": "same-site",
-                      "Sec-Fetch-User": "?1",
-                      "Upgrade-Insecure-Requests": "1",
-                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
-                  }
+                  # Define headers for curl
+                  headers = [
+                      "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                      "Accept-Encoding: gzip, deflate, br, zstd",
+                      "Accept-Language: en-US,en;q=0.9",
+                      "Connection: keep-alive",
+                      f"Cookie: {cookies_str}",
+                      "Referer: https://1fichier.com/",
+                      'sec-ch-ua: "Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+                      "sec-ch-ua-mobile: ?0",
+                      'sec-ch-ua-platform: "Windows"',
+                      "Sec-Fetch-Dest: document",
+                      "Sec-Fetch-Mode: navigate",
+                      "Sec-Fetch-Site: same-site",
+                      "Sec-Fetch-User: ?1",
+                      "Upgrade-Insecure-Requests: 1",
+                      "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+                  ]
 
-                  # Format headers for curl (Host will be set dynamically)
-                  headers_str = " ".join([f"-H \"{key}: {value}\"" for key, value in headers.items() if key != "Host"])
+                  headers_str = " ".join([f"-H \"{header}\"" for header in headers])
 
                   return download_url, filename, cookies_str, headers_str
               except Exception as e:
@@ -284,7 +277,6 @@ jobs:
             echo "Download URL: $download_url"
             echo "Cookies: $cookies"
             echo "Headers (raw): $headers -H \"Host: $host\""
-            # Format headers for better readability
             echo "Headers (formatted):"
             if [ -n "$headers" ]; then
               echo "$headers" | grep -o -E '-H "[^"]+"' | sed 's/-H "//; s/"$//' | while IFS= read -r header; do
@@ -308,9 +300,9 @@ jobs:
               curl -s -X POST -H "Content-Type: application/json" -d "$warning_payload" "$DISCORD_WEBHOOK_URL"
             fi
 
-            # Download the file using curl with headers and Host, silencing progress output
+            # Download the file using curl with headers and Host, completely silent
             echo "Starting download..."
-            eval curl -s --show-error -C - --retry 10 --retry-delay 10 $headers -H \"Host: $host\" "$download_url" --output "$temp_dir/$filename"
+            curl -s -S -C - --retry 10 --retry-delay 10 $headers -H "Host: $host" "$download_url" --output "$temp_dir/$filename" > /dev/null
             download_exit_code=$?
 
             # Check if download was successful
@@ -374,7 +366,6 @@ jobs:
             else
               echo "Download failed."
               cat extract_output.txt
-              # Check for debug HTML files
               if [ -f debug_get.html ]; then
                 echo "GET response HTML saved to debug_get.html"
               fi
@@ -399,7 +390,6 @@ jobs:
           else
             echo "Failed to extract download URL or filename."
             cat extract_output.txt
-            # Check for debug HTML files
             if [ -f debug_get.html ]; then
               echo "GET response HTML saved to debug_get.html"
             fi
