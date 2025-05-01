@@ -1,5 +1,4 @@
-```yaml
-name: 1fichier Download and Upload to Gofile with Notifications
+name: 1fichier Download and Upload to Gofile with Notification
 
 on:
   push:
@@ -307,4 +306,3 @@ jobs:
 
           # Clean up
           rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt curl_headers.txt
-```
