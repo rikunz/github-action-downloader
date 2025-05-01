@@ -26,12 +26,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
-          # Install Node.js and npm
-          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-          sudo apt-get install -y nodejs
-          # Install Puppeteer dependencies
-          sudo apt-get install -y chromium-browser
-          npm install puppeteer
+          pip install requests beautifulsoup4
 
       - name: Create downloads directory
         run: mkdir -p downloads
@@ -101,118 +96,134 @@ jobs:
             touch downloaded_files.txt
           fi
 
-          # Create Node.js script to extract download URL, filename, cookies, and headers using Puppeteer
-          cat << 'EOF' > extract_1fichier_url.js
-          const puppeteer = require('puppeteer');
+          # Create Python script to extract download URL, filename, and cookies
+          cat << 'EOF' > extract_1fichier_url.py
+          import requests
+          from bs4 import BeautifulSoup
+          import sys
+          import re
+          import uuid
+          import base64
+          import os
 
-          async function extract1fichierUrl(url) {
-            let browser;
-            try {
-              // Launch headless Chrome
-              browser = await puppeteer.launch({
-                executablePath: '/usr/bin/chromium-browser',
-                headless: true,
-                args: ['--no-sandbox', '--disable-dev-shm-usage']
-              });
-              const page = await browser.newPage();
+          def extract_1fichier_url(url):
+              try:
+                  # Create a session to persist cookies
+                  session = requests.Session()
+                  session.headers.update({
+                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                      "Accept-Language": "en-US,en;q=0.9",
+                      "Connection": "keep-alive"
+                  })
 
-              // Set User-Agent
-              await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+                  # Initial GET request
+                  response = session.get(url, allow_redirects=True)
+                  if response.status_code != 200:
+                      print(f"Failed to access URL: Status {response.status_code}")
+                      return None, None, None, None
 
-              // Navigate to the URL
-              console.log('Loading page with Puppeteer');
-              await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+                  # Parse HTML to extract adz and filename
+                  soup = BeautifulSoup(response.content, 'html.parser')
+                  adz_input = soup.find_all('input', {'name': 'adz'})
+                  if not adz_input:
+                      print("Could not find adz input")
+                      return None, None, None, None
+                  adz = adz_input[0].get('value', '')
 
-              // Wait for adz input
-              await page.waitForSelector('input[name="adz"]', { timeout: 10000 }).catch(() => {
-                console.error('Could not find adz input');
-                throw new Error('Could not find adz input');
-              });
+                  filename_elements = soup.find_all('td', class_='normal')
+                  if len(filename_elements) < 2:
+                      print("Could not find filename")
+                      return None, None, None, None
+                  filename = filename_elements[1].text.strip()
 
-              // Extract adz value
-              const adz = await page.$eval('input[name="adz"]', input => input.value);
-              if (!adz) {
-                console.error('Adz value is empty');
-                throw new Error('Adz value is empty');
-              }
+                  # Try to extract cookies from HTML (e.g., in <script> tags)
+                  cookies = {}
+                  html_content = str(soup)
+                  shared_id_match = re.search(r'_sharedID\s*=\s*[\'"]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\'"]', html_content)
+                  cst_match = re.search(r'_sharedID_cst\s*=\s*[\'"]([A-Za-z0-9+/=]+)[\'"]', html_content)
 
-              // Extract filename
-              const filename = await page.$eval('td.normal:nth-child(2)', td => td.textContent.trim());
-              if (!filename) {
-                console.error('Could not find filename');
-                throw new Error('Could not find filename');
-              }
+                  if shared_id_match:
+                      cookies['_sharedID'] = shared_id_match.group(1)
+                  if cst_match:
+                      cookies['_sharedID_cst'] = cst_match.group(1)
 
-              // Perform POST request equivalent by submitting the form
-              const postResponse = await page.evaluate(async (adz, url) => {
-                const response = await fetch(url, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                  body: new URLSearchParams({
-                    adz: adz,
-                    did: '0',
-                    dlinline: 'on'
-                  }).toString()
-                });
-                return await response.text();
-              }, adz, url);
+                  # If cookies not found in HTML, mock them
+                  if not cookies:
+                      print("No cookies found in HTML, generating mock cookies")
+                      cookies['_sharedID'] = str(uuid.uuid4())
+                      # Generate a random 8-byte string and encode in base64
+                      random_bytes = os.urandom(8)
+                      cookies['_sharedID_cst'] = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
+                  
+                  cookies_str = "; ".join([f"{key}={value}" for key, value in cookies.items()])
 
-              // Parse the POST response to find the download link
-              const downloadLinkMatch = postResponse.match(/<a class="ok btn-general btn-orange" href="([^"]+)"/);
-              const downloadUrl = downloadLinkMatch ? downloadLinkMatch[1] : null;
-              if (!downloadUrl) {
-                console.error('Could not find download URL');
-                throw new Error('Could not find download URL');
-              }
+                  # POST request to get download page
+                  data = {"adz": adz, "did": 0, "dlinline": "on"}
+                  post_response = session.post(url, data=data, allow_redirects=True)
+                  if post_response.status_code != 200:
+                      print(f"POST request failed: Status {post_response.status_code}")
+                      return None, None, None, None
 
-              // Extract cookies
-              const cookies = await page.cookies();
-              const cookiesStr = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
-              if (!cookiesStr) {
-                console.warn('Warning: No cookies captured from Puppeteer');
-              }
+                  # Parse POST response to find download link
+                  soup = BeautifulSoup(post_response.content, 'html.parser')
+                  links = soup.find_all('a')
+                  target_text = "Click here to download the file"
+                  download_url = None
+                  for link in links:
+                      if target_text in str(link):
+                          download_url = link.get('href')
+                          break
 
-              // Define essential headers (no Referer)
-              const headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Connection': 'keep-alive'
-              };
+                  if not download_url:
+                      print("Could not find download URL")
+                      return None, None, None, None
 
-              // Format headers for curl
-              const headersStr = Object.entries(headers).map(([key, value]) => `-H "${key}: ${value}"`).join(' ');
+                  # Define headers for curl (based on provided sample)
+                  headers = {
+                      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                      "Accept-Encoding": "gzip, deflate, br, zstd",
+                      "Accept-Language": "en-US,en;q=0.9",
+                      "Connection": "keep-alive",
+                      "Cookie": cookies_str,
+                      "Referer": "https://1fichier.com/",
+                      "sec-ch-ua": '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+                      "sec-ch-ua-mobile": "?0",
+                      "sec-ch-ua-platform": '"Windows"',
+                      "Sec-Fetch-Dest": "document",
+                      "Sec-Fetch-Mode": "navigate",
+                      "Sec-Fetch-Site": "same-site",
+                      "Sec-Fetch-User": "?1",
+                      "Upgrade-Insecure-Requests": "1",
+                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+                  }
 
-              // Output results
-              console.log(`DOWNLOAD_URL=${downloadUrl}`);
-              console.log(`FILENAME=${filename}`);
-              console.log(`COOKIES=${cookiesStr}`);
-              console.log(`HEADERS=${headersStr}`);
+                  # Format headers for curl (Host will be set dynamically)
+                  headers_str = " ".join([f"-H \"{key}: {value}\"" for key, value in headers.items() if key != "Host"])
 
-              return { downloadUrl, filename, cookiesStr, headersStr };
-            } catch (error) {
-              console.error(`Error during extraction: ${error.message}`);
-              process.exit(1);
-            } finally {
-              if (browser) await browser.close();
-            }
-          }
+                  return download_url, filename, cookies_str, headers_str
+              except Exception as e:
+                  print(f"Error during extraction: {str(e)}")
+                  return None, None, None, None
 
-          if (require.main === module) {
-            if (process.argv.length !== 3) {
-              console.error('Usage: node extract_1fichier_url.js <url>');
-              process.exit(1);
-            }
-            const url = process.argv[2];
-            extract1fichierUrl(url).catch(error => {
-              console.error(`Extraction failed: ${error.message}`);
-              process.exit(1);
-            });
-          }
+          if __name__ == "__main__":
+              if len(sys.argv) != 2:
+                  print("Usage: python extract_1fichier_url.py <url>")
+                  sys.exit(1)
+              url = sys.argv[1]
+              download_url, filename, cookies, headers = extract_1fichier_url(url)
+              if download_url and filename and cookies and headers:
+                  print(f"DOWNLOAD_URL={download_url}")
+                  print(f"FILENAME={filename}")
+                  print(f"COOKIES={cookies}")
+                  print(f"HEADERS={headers}")
+              else:
+                  print("Extraction failed")
+                  sys.exit(1)
           EOF
 
-          # Run the Node.js script to extract download URL, filename, cookies, and headers
-          node extract_1fichier_url.js "$link" > extract_output.txt 2>&1
+          # Run the Python script to extract download URL, filename, cookies, and headers
+          python extract_1fichier_url.py "$link" > extract_output.txt 2>&1
           extract_exit_code=$?
 
           # Extract download URL, filename, cookies, and headers from output
@@ -223,37 +234,48 @@ jobs:
 
           # Check if extraction was successful
           if [ $extract_exit_code -eq 0 ] && [ -n "$download_url" ] && [ -n "$filename" ]; then
+            # Extract hostname from download_url for Host header
+            host=$(echo "$download_url" | awk -F/ '{print $3}')
+            if [ -z "$host" ]; then
+              echo "Failed to extract hostname from download_url"
+              error_payload=$(jq -n --arg link "$first_link" '{
+                embeds: [{
+                  title: "❌ Failed to Extract Hostname",
+                  description: "Link: \($link)\nCould not extract hostname from download URL.",
+                  color: 16711680
+                }]
+              }')
+              curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+              exit 1
+            fi
+
             # Log the download URL, cookies, and headers
             echo "Download URL: $download_url"
             echo "Cookies: $cookies"
-            echo "Headers (raw): $headers"
-            # Format headers for better readability, with fallback for empty headers
-            if [ -n "$headers" ]; then
-              echo "Headers (formatted):"
-              echo "$headers" | grep -o -E '-H "[^"]+"' | sed 's/-H "//; s/"$//' | while IFS= read -r header; do
-                echo "  $header"
-              done
-            else
-              echo "Headers (formatted): None"
-            fi
+            echo "Headers (raw): $headers -H \"Host: $host\""
+            # Format headers for better readability
+            echo "Headers (formatted):"
+            echo "$headers" | grep -o -E '-H "[^"]+"' | sed 's/-H "//; s/"$//' | while IFS= read -r header; do
+              echo "  $header"
+            done
+            echo "  Host: $host"
 
-            # Warn if cookies are empty
-            if [ -z "$cookies" ]; then
-              echo "Warning: No cookies captured. Download may fail if cookies are required."
+            # Warn if cookies are mocked
+            if grep -q "No cookies found in HTML" extract_output.txt; then
+              echo "Warning: Cookies were mocked. Download may fail if real cookies are required."
               warning_payload=$(jq -n --arg link "$first_link" '{
                 embeds: [{
-                  title: "⚠️ No Cookies Captured",
-                  description: "Link: \($link)\nNo cookies were captured during extraction with Puppeteer. This may indicate a CAPTCHA or anti-bot measures. Check logs for details.",
+                  title: "⚠️ Cookies Mocked",
+                  description: "Link: \($link)\nNo cookies found in HTML, using mocked cookies. Check logs for details.",
                   color: 16776960
                 }]
               }')
               curl -X POST -H "Content-Type: application/json" -d "$warning_payload" "$DISCORD_WEBHOOK_URL"
             fi
 
-            # Download the file using curl with cookies and headers
+            # Download the file using curl with headers and Host
             echo "Starting download..."
-            # Use eval to safely handle headers string
-            eval curl -C - --retry 10 --retry-delay 10 ${cookies:+"--cookie \"$cookies\""} $headers "$download_url" --output "$temp_dir/$filename"
+            eval curl -C - --retry 10 --retry-delay 10 $headers -H \"Host: $host\" "$download_url" --output "$temp_dir/$filename"
             download_exit_code=$?
 
             # Check if download was successful
@@ -352,4 +374,4 @@ jobs:
           fi
 
           # Clean up
-          rm -rf "$temp_dir" extract_1fichier_url.js extract_output.txt
+          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt
