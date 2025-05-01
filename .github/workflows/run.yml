@@ -17,17 +17,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.TOKEN }}
-
-      - name: Install dependencies
+     .testng: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq tor
-          tor &  # Start Tor in the background
-          sleep 10  # Wait for Tor to start
+          sudo apt-get install -y jq
 
       - name: Create downloads directory
         run: mkdir -p downloads
@@ -85,20 +78,9 @@ jobs:
             }]
           }')
           curl -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
-
-          # Set up Tor proxy
-          TOR_PROXY="socks5h://127.0.0.1:9050"
-
-          # Function to use curl with Tor
-          tcurl() {
-            curl --proxy "$TOR_PROXY" --connect-timeout 15 --user-agent "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0" --header "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" --header "Accept-Language: en-US,en;q=0.5" --header "Accept-Encoding: gzip, deflate, br" --compressed "$@"
-          }
-
-          # Temporary directory
           temp_dir=$(mktemp -d)
           cookie_file=$(mktemp --tmpdir="$temp_dir" cookies.XXX)
 
-          # Try to find a circuit without wait time
           max_count=50
           count=0
           slot_found=false
@@ -107,7 +89,7 @@ jobs:
             echo "Attempt $count to find a slot..."
 
             # Get download page
-            download_page=$(tcurl --cookie-jar "$cookie_file" --silent --show-error "$first_link")
+            download_page=$(curl --cookie-jar "$cookie_file" --silent --show-error --connect-timeout 15 --user-agent "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0" --header "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" --header "Accept-Language: en-US,en;q=0.5" --header "Accept-Encoding: gzip, deflate, br" --compressed "$first_link")
 
             # Check if there's a wait time or slot available
             if ! echo "$download_page" | grep -q 'Please wait'; then
@@ -156,7 +138,7 @@ jobs:
           fi
 
           # Post the form to get download link page
-          download_link_page=$(tcurl --location --cookie "$cookie_file" --cookie-jar "$cookie_file" --silent --show-error --form "submit=Download" --form "adz=$adz" "$first_link")
+          download_link_page=$(curl --location --cookie "$cookie_file" --cookie-jar "$cookie_file" --silent --show-error --form "submit=Download" --form "adz=$adz" "$first_link")
 
           # Extract download link
           download_link=$(echo "$download_link_page" | grep -oP '<a href="\K[^"]+' | head -1)
@@ -180,7 +162,7 @@ jobs:
           fi
 
           # Download the file
-          tcurl --cookie "$cookie_file" --referer "$first_link" --output-dir "$temp_dir" --remote-name "$download_link"
+          curl --cookie "$cookie_file" --referer "$first_link" --output-dir "$temp_dir" --remote-name "$download_link"
 
           # Check if download was successful
           if [ $? -eq 0 ]; then
