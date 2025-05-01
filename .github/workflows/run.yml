@@ -83,7 +83,7 @@ jobs:
               color: 5814783
             }]
           }')
-          curl -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
+          curl -s -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
 
           # Clean the link (remove af= parameter if present)
           link=$(echo "$first_link" | awk -F'&af=' '{print $1}')
@@ -105,6 +105,7 @@ jobs:
           import uuid
           import base64
           import os
+          import urllib.parse
 
           def extract_1fichier_url(url):
               try:
@@ -114,22 +115,38 @@ jobs:
                       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
                       "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                       "Accept-Language": "en-US,en;q=0.9",
-                      "Connection": "keep-alive"
+                      "Connection": "keep-alive",
+                      "Referer": "https://1fichier.com/",
+                      "sec-ch-ua": '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+                      "sec-ch-ua-mobile": "?0",
+                      "sec-ch-ua-platform": '"Windows"',
+                      "Sec-Fetch-Dest": "document",
+                      "Sec-Fetch-Mode": "navigate",
+                      "Sec-Fetch-Site": "same-site",
+                      "Sec-Fetch-User": "?1",
+                      "Upgrade-Insecure-Requests": "1"
                   })
 
                   # Initial GET request
                   response = session.get(url, allow_redirects=True)
                   if response.status_code != 200:
                       print(f"Failed to access URL: Status {response.status_code}")
+                      # Save HTML for debugging
+                      with open("debug_get.html", "w", encoding="utf-8") as f:
+                          f.write(response.text)
                       return None, None, None, None
+
+                  # Save GET response HTML for debugging
+                  with open("debug_get.html", "w", encoding="utf-8") as f:
+                      f.write(response.text)
 
                   # Parse HTML to extract adz and filename
                   soup = BeautifulSoup(response.content, 'html.parser')
-                  adz_input = soup.find_all('input', {'name': 'adz'})
+                  adz_input = soup.find('input', {'name': 'adz'})
                   if not adz_input:
                       print("Could not find adz input")
                       return None, None, None, None
-                  adz = adz_input[0].get('value', '')
+                  adz = adz_input.get('value', '')
 
                   filename_elements = soup.find_all('td', class_='normal')
                   if len(filename_elements) < 2:
@@ -137,25 +154,33 @@ jobs:
                       return None, None, None, None
                   filename = filename_elements[1].text.strip()
 
-                  # Try to extract cookies from HTML (e.g., in <script> tags)
+                  # Try to extract cookies from HTML (e.g., in <script> tags or inputs)
                   cookies = {}
                   html_content = str(soup)
-                  shared_id_match = re.search(r'_sharedID\s*=\s*[\'"]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\'"]', html_content)
-                  cst_match = re.search(r'_sharedID_cst\s*=\s*[\'"]([A-Za-z0-9+/=]+)[\'"]', html_content)
+                  # Search for _sharedID (UUID format)
+                  shared_id_match = re.search(r'_sharedID\s*[:=]\s*[\'"]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\'"]', html_content, re.IGNORECASE)
+                  # Search for _sharedID_cst (base64-like string)
+                  cst_match = re.search(r'_sharedID_cst\s*[:=]\s*[\'"]([A-Za-z0-9+/=]+)[\'"]', html_content, re.IGNORECASE)
 
                   if shared_id_match:
                       cookies['_sharedID'] = shared_id_match.group(1)
                   if cst_match:
                       cookies['_sharedID_cst'] = cst_match.group(1)
 
-                  # If cookies not found in HTML, mock them
+                  # Check response cookies as fallback
                   if not cookies:
-                      print("No cookies found in HTML, generating mock cookies")
+                      for cookie_name, cookie_value in session.cookies.items():
+                          if cookie_name in ['_sharedID', '_sharedID_cst']:
+                              cookies[cookie_name] = cookie_value
+
+                  # If cookies not found, mock them
+                  if not cookies:
+                      print("No cookies found in HTML or response, generating mock cookies")
                       cookies['_sharedID'] = str(uuid.uuid4())
                       # Generate a random 8-byte string and encode in base64
                       random_bytes = os.urandom(8)
                       cookies['_sharedID_cst'] = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
-                  
+
                   cookies_str = "; ".join([f"{key}={value}" for key, value in cookies.items()])
 
                   # POST request to get download page
@@ -163,15 +188,21 @@ jobs:
                   post_response = session.post(url, data=data, allow_redirects=True)
                   if post_response.status_code != 200:
                       print(f"POST request failed: Status {post_response.status_code}")
+                      # Save HTML for debugging
+                      with open("debug_post.html", "w", encoding="utf-8") as f:
+                          f.write(post_response.text)
                       return None, None, None, None
+
+                  # Save POST response HTML for debugging
+                  with open("debug_post.html", "w", encoding="utf-8") as f:
+                      f.write(post_response.text)
 
                   # Parse POST response to find download link
                   soup = BeautifulSoup(post_response.content, 'html.parser')
-                  links = soup.find_all('a')
-                  target_text = "Click here to download the file"
+                  links = soup.find_all('a', class_='ok btn-general btn-orange')
                   download_url = None
                   for link in links:
-                      if target_text in str(link):
+                      if "Click here to download the file" in link.text:
                           download_url = link.get('href')
                           break
 
@@ -245,7 +276,7 @@ jobs:
                   color: 16711680
                 }]
               }')
-              curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+              curl -s -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
               exit 1
             fi
 
@@ -255,27 +286,31 @@ jobs:
             echo "Headers (raw): $headers -H \"Host: $host\""
             # Format headers for better readability
             echo "Headers (formatted):"
-            echo "$headers" | grep -o -E '-H "[^"]+"' | sed 's/-H "//; s/"$//' | while IFS= read -r header; do
-              echo "  $header"
-            done
+            if [ -n "$headers" ]; then
+              echo "$headers" | grep -o -E '-H "[^"]+"' | sed 's/-H "//; s/"$//' | while IFS= read -r header; do
+                echo "  $header"
+              done
+            else
+              echo "  None"
+            fi
             echo "  Host: $host"
 
             # Warn if cookies are mocked
-            if grep -q "No cookies found in HTML" extract_output.txt; then
+            if grep -q "No cookies found in HTML or response" extract_output.txt; then
               echo "Warning: Cookies were mocked. Download may fail if real cookies are required."
               warning_payload=$(jq -n --arg link "$first_link" '{
                 embeds: [{
                   title: "⚠️ Cookies Mocked",
-                  description: "Link: \($link)\nNo cookies found in HTML, using mocked cookies. Check logs for details.",
+                  description: "Link: \($link)\nNo cookies found in HTML or response, using mocked cookies. Check logs for details.",
                   color: 16776960
                 }]
               }')
-              curl -X POST -H "Content-Type: application/json" -d "$warning_payload" "$DISCORD_WEBHOOK_URL"
+              curl -s -X POST -H "Content-Type: application/json" -d "$warning_payload" "$DISCORD_WEBHOOK_URL"
             fi
 
-            # Download the file using curl with headers and Host
+            # Download the file using curl with headers and Host, silencing progress output
             echo "Starting download..."
-            eval curl -C - --retry 10 --retry-delay 10 $headers -H \"Host: $host\" "$download_url" --output "$temp_dir/$filename"
+            eval curl -s --show-error -C - --retry 10 --retry-delay 10 $headers -H \"Host: $host\" "$download_url" --output "$temp_dir/$filename"
             download_exit_code=$?
 
             # Check if download was successful
@@ -306,7 +341,7 @@ jobs:
                       color: 5814783
                     }]
                   }')
-                curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
+                curl -s -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
                 # Remove first line from fichier_download_list.txt
                 tail -n +2 fichier_download_list.txt > temp.txt
                 mv temp.txt fichier_download_list.txt
@@ -328,7 +363,7 @@ jobs:
                     color: 16711680
                   }]
                 }')
-                curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+                curl -s -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
                 # Keep the link and commit
                 git config user.name "GitHub Actions"
                 git config user.email "actions@github.com"
@@ -339,14 +374,21 @@ jobs:
             else
               echo "Download failed."
               cat extract_output.txt
+              # Check for debug HTML files
+              if [ -f debug_get.html ]; then
+                echo "GET response HTML saved to debug_get.html"
+              fi
+              if [ -f debug_post.html ]; then
+                echo "POST response HTML saved to debug_post.html"
+              fi
               error_payload=$(jq -n --arg link "$first_link" '{
                 embeds: [{
                   title: "❌ Failed to Download from 1fichier",
-                  description: "Link: \($link)\nCheck logs for details.",
+                  description: "Link: \($link)\nCheck logs and debug HTML files for details.",
                   color: 16711680
                 }]
               }')
-              curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+              curl -s -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
               # Keep the link and commit
               git config user.name "GitHub Actions"
               git config user.email "actions@github.com"
@@ -357,14 +399,21 @@ jobs:
           else
             echo "Failed to extract download URL or filename."
             cat extract_output.txt
+            # Check for debug HTML files
+            if [ -f debug_get.html ]; then
+              echo "GET response HTML saved to debug_get.html"
+            fi
+            if [ -f debug_post.html ]; then
+              echo "POST response HTML saved to debug_post.html"
+            fi
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
                 title: "❌ Failed to Extract 1fichier Download URL",
-                description: "Link: \($link)\nCheck logs for details. Possible CAPTCHA or anti-bot measures detected.",
+                description: "Link: \($link)\nCheck logs and debug HTML files for details. Possible CAPTCHA or anti-bot measures detected.",
                 color: 16711680
               }]
             }')
-            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+            curl -s -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
             # Keep the link and commit
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
@@ -374,4 +423,4 @@ jobs:
           fi
 
           # Clean up
-          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt
+          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt debug_get.html debug_post.html
