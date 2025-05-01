@@ -3,10 +3,10 @@ name: Mega Download and Upload to Gofile with Notifications
 on:
   push:
     branches:
-      - main
+      - mega
   pull_request:
     branches:
-      - main
+      - mega
   workflow_dispatch:
 
 permissions:
