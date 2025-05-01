@@ -301,6 +301,7 @@ jobs:
 
             # Download the file using curl, showing progress
             echo "Starting download..."
+            echo "curl -C - --retry 10 --retry-delay 10 $headers -H \"Host: $host\" \"$download_url\" --output \"$temp_dir/$filename\""
             curl -C - --retry 10 --retry-delay 10 $headers -H "Host: $host" "$download_url" --output "$temp_dir/$filename"
             download_exit_code=$?
 
