@@ -96,40 +96,58 @@ jobs:
             touch downloaded_files.txt
           fi
 
-          # Create Python script to extract download URL and filename
+          # Create Python script to extract download URL, filename, cookies, and all response headers
           cat << 'EOF' > extract_1fichier_url.py
           import requests
           from bs4 import BeautifulSoup
           import sys
+          import re
 
           def extract_1fichier_url(url):
               try:
+                  # Create a session to persist cookies
+                  session = requests.Session()
+                  # Set a browser-like User-Agent and initial headers
+                  session.headers.update({
+                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                      "Accept-Language": "en-US,en;q=0.9",
+                      "Referer": "https://1fichier.com/",
+                      "Connection": "keep-alive"
+                  })
+
                   # Initial GET request
-                  response = requests.get(url)
+                  response = session.get(url)
                   if response.status_code != 200:
                       print(f"Failed to access URL: Status {response.status_code}")
-                      return None, None
+                      return None, None, None, None
+
+                  # Collect headers from GET response
+                  get_headers = dict(response.headers)
 
                   # Parse HTML to extract adz and filename
                   soup = BeautifulSoup(response.content, 'html.parser')
                   adz_input = soup.find_all('input')
                   if not adz_input:
                       print("Could not find adz input")
-                      return None, None
+                      return None, None, None, None
                   adz = str(adz_input[0]).replace('<input name="adz" type="hidden" value="', '').replace('"/>', '')
 
                   filename_elements = soup.find_all('td', class_='normal')
                   if len(filename_elements) < 2:
                       print("Could not find filename")
-                      return None, None
+                      return None, None, None, None
                   filename = str(filename_elements[1]).replace('<td class="normal">', '').replace('</td>', '')
 
                   # POST request to get download page
                   data = {"adz": adz, "did": 0, "dlinline": "on"}
-                  post_response = requests.post(url, data=data)
+                  post_response = session.post(url, data=data)
                   if post_response.status_code != 200:
                       print(f"POST request failed: Status {post_response.status_code}")
-                      return None, None
+                      return None, None, None, None
+
+                  # Collect headers from POST response
+                  post_headers = dict(post_response.headers)
 
                   # Parse POST response to find download link
                   soup = BeautifulSoup(post_response.content, 'html.parser')
@@ -143,43 +161,94 @@ jobs:
 
                   if not download_url:
                       print("Could not find download URL")
-                      return None, None
+                      return None, None, None, None
 
-                  return download_url, filename
+                  # Extract cookies
+                  cookies = "; ".join([f"{key}={value}" for key, value in session.cookies.get_dict().items()])
+                  if not cookies:
+                      cookies = ""
+
+                  # Combine headers from GET and POST, prioritizing POST
+                  all_headers = {**get_headers, **post_headers}
+                  # Filter out suspicious headers
+                  filtered_headers = {}
+                  exclude_patterns = [
+                      r'python-requests',
+                      r'powered\s*by',
+                      r'server',
+                      r'x-powered-by',
+                      r'x-.*',  # Exclude headers starting with X- (often server-specific)
+                      r'via',
+                      r'cf-.*'  # Exclude Cloudflare-specific headers
+                  ]
+                  for key, value in all_headers.items():
+                      exclude = False
+                      key_lower = key.lower()
+                      value_lower = str(value).lower()
+                      for pattern in exclude_patterns:
+                          if re.search(pattern, key_lower) or re.search(pattern, value_lower):
+                              exclude = True
+                              break
+                      if not exclude:
+                          filtered_headers[key] = value
+
+                  # Add essential browser-like headers if missing
+                  if "User-Agent" not in filtered_headers:
+                      filtered_headers["User-Agent"] = session.headers["User-Agent"]
+                  if "Accept" not in filtered_headers:
+                      filtered_headers["Accept"] = session.headers["Accept"]
+                  if "Accept-Language" not in filtered_headers:
+                      filtered_headers["Accept-Language"] = session.headers["Accept-Language"]
+                  if "Referer" not in filtered_headers:
+                      filtered_headers["Referer"] = url
+                  if "Connection" not in filtered_headers:
+                      filtered_headers["Connection"] = "keep-alive"
+
+                  # Format headers for curl
+                  headers_str = " ".join([f"-H \"{key}: {value}\"" for key, value in filtered_headers.items()])
+
+                  return download_url, filename, cookies, headers_str
               except Exception as e:
                   print(f"Error during extraction: {str(e)}")
-                  return None, None
+                  return None, None, None, None
 
           if __name__ == "__main__":
               if len(sys.argv) != 2:
                   print("Usage: python extract_1fichier_url.py <url>")
                   sys.exit(1)
               url = sys.argv[1]
-              download_url, filename = extract_1fichier_url(url)
+              download_url, filename, cookies, headers = extract_1fichier_url(url)
               if download_url and filename:
                   print(f"DOWNLOAD_URL={download_url}")
                   print(f"FILENAME={filename}")
+                  print(f"COOKIES={cookies}")
+                  print(f"HEADERS={headers}")
               else:
                   print("Extraction failed")
                   sys.exit(1)
           EOF
 
-          # Run the Python script to extract download URL and filename
+          # Run the Python script to extract download URL, filename, cookies, and headers
           python extract_1fichier_url.py "$link" > extract_output.txt 2>&1
           extract_exit_code=$?
 
-          # Extract download URL and filename from output
+          # Extract download URL, filename, cookies, and headers from output
           download_url=$(grep "DOWNLOAD_URL=" extract_output.txt | cut -d'=' -f2-)
           filename=$(grep "FILENAME=" extract_output.txt | cut -d'=' -f2-)
+          cookies=$(grep "COOKIES=" extract_output.txt | cut -d'=' -f2-)
+          headers=$(grep "HEADERS=" extract_output.txt | cut -d'=' -f2-)
 
           # Check if extraction was successful
           if [ $extract_exit_code -eq 0 ] && [ -n "$download_url" ] && [ -n "$filename" ]; then
-            # Log the download URL
+            # Log the download URL, cookies, and headers
             echo "Download URL: $download_url"
+            echo "Cookies: $cookies"
+            echo "Headers: $headers"
 
-            # Download the file using curl
+            # Download the file using curl with cookies and headers
             echo "Starting download..."
-            curl -C - --retry 10 --retry-delay 10 "$download_url" --output "$temp_dir/$filename"
+            # Use eval to safely handle headers string
+            eval curl -C - --retry 10 --retry-delay 10 ${cookies:+"--cookie \"$cookies\""} $headers "$download_url" --output "$temp_dir/$filename"
             download_exit_code=$?
 
             # Check if download was successful
