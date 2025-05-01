@@ -183,6 +183,8 @@ def trigger_1fichier_download(url, download_dir):
                 print("Saved page source to debug_page.html for inspection")
             return False
 
+        finally:
+            clean_chrome_processes()
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
