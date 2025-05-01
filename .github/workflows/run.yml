@@ -105,8 +105,12 @@ jobs:
           from selenium import webdriver
           from selenium.webdriver.chrome.options import Options
           from selenium.webdriver.chrome.service import Service
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+          from selenium.webdriver.support import expected_conditions as EC
+          from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 
-          def get_1fichier_cookies():
+          def get_1fichier_cookies(url):
               try:
                   # Set up Chrome options for headless mode
                   chrome_options = Options()
@@ -116,35 +120,92 @@ jobs:
                   chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
 
                   # Set up ChromeDriver service
-                  service = Service('/usr/bin/chromedriver')
-                  driver = webdriver.Chrome(service=service, options=chrome_options)
-
-                  # Navigate to 1fichier homepage
-                  driver.get('https://1fichier.com/')
-                  time.sleep(5)  # Wait for cookies to be set
-
-                  # Extract cookies
-                  cookies = driver.get_cookies()
-                  driver.quit()
-
-                  # Find _sharedID and _sharedID_cst
-                  shared_id = None
-                  shared_id_cst = None
-                  for cookie in cookies:
-                      if cookie['name'] == '_sharedID':
-                          shared_id = cookie['value']
-                      elif cookie['name'] == '_sharedID_cst':
-                          shared_id_cst = cookie['value']
-
-                  if not shared_id or not shared_id_cst:
-                      print("Failed to extract _sharedID or _sharedID_cst cookies")
+                  try:
+                      service = Service('/usr/bin/chromedriver')
+                      driver = webdriver.Chrome(service=service, options=chrome_options)
+                  except WebDriverException as e:
+                      print(f"Error initializing ChromeDriver: {str(e)}")
+                      print("Ensure ChromeDriver is installed and the path is correct.")
                       return None, None
 
-                  print(f"SHARED_ID={shared_id}")
-                  print(f"SHARED_ID_CST={shared_id_cst}")
-                  return shared_id, shared_id_cst
+                  try:
+                      # Navigate to the provided 1fichier file URL
+                      print(f"Navigating to {url}")
+                      driver.get(url)
+
+                      # Wait for the cookie box close button and click it
+                      print("Waiting for cookie box close button...")
+                      try:
+                          cookie_button = WebDriverWait(driver, 10).until(
+                              EC.element_to_be_clickable((By.CLASS_NAME, "cookie_box_close"))
+                          )
+                          cookie_button.click()
+                          print("Clicked cookie box close button")
+                      except TimeoutException:
+                          print("Timeout waiting for cookie box close button. It may not be present or page is blocked.")
+                          print(f"Current page title: {driver.title}")
+                          print(f"Current page URL: {driver.current_url}")
+                          with open("debug_page.html", "w", encoding="utf-8") as f:
+                              f.write(driver.page_source)
+                          print("Saved page source to debug_page.html for inspection")
+                      except NoSuchElementException:
+                          print("Cookie box close button not found on page.")
+                          print(f"Current page title: {driver.title}")
+                          print(f"Current page URL: {driver.current_url}")
+                          with open("debug_page.html", "w", encoding="utf-8") as f:
+                              f.write(driver.page_source)
+                          print("Saved page source to debug_page.html for inspection")
+
+                      # Wait for cookies to be set
+                      print("Waiting for cookies to be set...")
+                      time.sleep(5)  # Adjust if needed
+
+                      # Extract cookies
+                      cookies = driver.get_cookies()
+                      print("Cookies received:")
+                      for cookie in cookies:
+                          print(f"{cookie['name']}={cookie['value']}")
+
+                      # Find _sharedID and _sharedID_cst
+                      shared_id = None
+                      shared_id_cst = None
+                      for cookie in cookies:
+                          if cookie['name'] == '_sharedID':
+                              shared_id = cookie['value']
+                          elif cookie['name'] == '_sharedID_cst':
+                              shared_id_cst = cookie['value']
+
+                      if shared_id and shared_id_cst:
+                          print(f"Successfully extracted cookies:")
+                          print(f"SHARED_ID={shared_id}")
+                          print(f"SHARED_ID_CST={shared_id_cst}")
+                          return shared_id, shared_id_cst
+                      else:
+                          print("Failed to find _sharedID or _sharedID_cst in cookies")
+                          print(f"Current page title: {driver.title}")
+                          print(f"Current page URL: {driver.current_url}")
+                          with open("debug_page.html", "w", encoding="utf-8") as f:
+                              f.write(driver.page_source)
+                          print("Saved page source to debug_page.html for inspection")
+                          return None, None
+
+                  except WebDriverException as e:
+                      print(f"Error during page navigation or interaction: {str(e)}")
+                      print(f"Current page title: {driver.title if 'driver' in locals() else 'Driver not initialized'}")
+                      print(f"Current page URL: {driver.current_url if 'driver' in locals() else 'Driver not initialized'}")
+                      if 'driver' in locals():
+                          with open("debug_page.html", "w", encoding="utf-8") as f:
+                              f.write(driver.page_source)
+                          print("Saved page source to debug_page.html for inspection")
+                      return None, None
+
+                  finally:
+                      if 'driver' in locals():
+                          driver.quit()
+                          print("Closed browser")
+
               except Exception as e:
-                  print(f"Error extracting cookies with Selenium: {str(e)}")
+                  print(f"Unexpected error: {str(e)}")
                   return None, None
 
           def extract_1fichier_url(url, shared_id, shared_id_cst):
@@ -239,8 +300,8 @@ jobs:
                   sys.exit(1)
               url = sys.argv[1]
 
-              # Get cookies from 1fichier homepage
-              shared_id, shared_id_cst = get_1fichier_cookies()
+              # Get cookies from 1fichier file page
+              shared_id, shared_id_cst = get_1fichier_cookies(url)
               if not shared_id or not shared_id_cst:
                   print("Failed to get cookies")
                   sys.exit(1)
@@ -258,10 +319,46 @@ jobs:
           EOF
 
           # Run the Python script to extract download URL, filename, and cookies
+          echo "Running Python script to extract download URL, filename, and cookies..."
           python extract_1fichier_url.py "$link" > extract_output.txt 2>&1
           extract_exit_code=$?
 
+          # Log the Python script output for debugging
+          echo "Python script output:"
+          cat extract_output.txt
+
+          # Check if Python script failed
+          if [ $extract_exit_code -ne 0 ]; then
+            echo "Python script failed with exit code $extract_exit_code"
+            echo "Check extract_output.txt for detailed error messages"
+            if [ -f debug_page.html ]; then
+              echo "Page source saved to debug_page.html for inspection"
+            fi
+            if [ -f debug_get.html ]; then
+              echo "GET response HTML saved to debug_get.html"
+            fi
+            if [ -f debug_post.html ]; then
+              echo "POST response HTML saved to debug_post.html"
+            fi
+            error_payload=$(jq -n --arg link "$first_link" '{
+              embeds: [{
+                title: "❌ Failed to Extract 1fichier Download URL",
+                description: "Link: \($link)\nPython script failed. Check logs and debug files for details.",
+                color: 16711680
+              }]
+            }')
+            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+            # Keep the link and commit
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git add fichier_download_list.txt downloaded_files.txt
+            git commit -m "Failed to process first link: $first_link"
+            git push
+            exit 1
+          fi
+
           # Extract download URL, filename, and cookies from output
+          echo "Extracting download URL, filename, and cookies from output..."
           download_url=$(grep "DOWNLOAD_URL=" extract_output.txt | cut -d'=' -f2-)
           filename=$(grep "FILENAME=" extract_output.txt | cut -d'=' -f2-)
           shared_id=$(grep "SHARED_ID=" extract_output.txt | cut -d'=' -f2-)
@@ -269,6 +366,11 @@ jobs:
 
           # Check if extraction was successful
           if [ $extract_exit_code -eq 0 ] && [ -n "$download_url" ] && [ -n "$filename" ] && [ -n "$shared_id" ] && [ -n "$shared_id_cst" ]; then
+            echo "Extraction successful:"
+            echo "Download URL: $download_url"
+            echo "Filename: $filename"
+            echo "Cookies: _sharedID=$shared_id; _sharedID_cst=$shared_id_cst"
+
             # Create cookie string for curl
             cookies="_sharedID=$shared_id; _sharedID_cst=$shared_id_cst"
 
@@ -306,6 +408,7 @@ jobs:
 
             # Check if download was successful
             if [ $download_exit_code -eq 0 ] && [ -f "$temp_dir/$filename" ] && [ -s "$temp_dir/$filename" ]; then
+              echo "Download successful, uploading to Gofile..."
               # Upload to Gofile
               gofile_response=$(curl -s -F "file=@$temp_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
               if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
@@ -363,13 +466,15 @@ jobs:
                 git push
               fi
             else
-              echo "Download failed."
-              cat extract_output.txt
+              echo "Download failed with exit code $download_exit_code"
               if [ -f debug_get.html ]; then
                 echo "GET response HTML saved to debug_get.html"
               fi
               if [ -f debug_post.html ]; then
                 echo "POST response HTML saved to debug_post.html"
+              fi
+              if [ -f debug_page.html ]; then
+                echo "Page source saved to debug_page.html for inspection"
               fi
               error_payload=$(jq -n --arg link "$first_link" '{
                 embeds: [{
@@ -388,12 +493,14 @@ jobs:
             fi
           else
             echo "Failed to extract download URL, filename, or cookies."
-            cat extract_output.txt
             if [ -f debug_get.html ]; then
               echo "GET response HTML saved to debug_get.html"
             fi
             if [ -f debug_post.html ]; then
               echo "POST response HTML saved to debug_post.html"
+            fi
+            if [ -f debug_page.html ]; then
+              echo "Page source saved to debug_page.html for inspection"
             fi
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
@@ -412,4 +519,4 @@ jobs:
           fi
 
           # Clean up
-          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt debug_get.html debug_post.html
+          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt debug_get.html debug_post.html debug_page.html
