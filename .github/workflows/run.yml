@@ -1,12 +1,12 @@
-name: Mega Download and Upload to Gofile with Notifications
+name: 1fichier Download and Upload to Gofile with Notifications
 
 on:
   push:
     branches:
-      - main
+      - fichier
   pull_request:
     branches:
-      - main
+      - fichier
   workflow_dispatch:
 
 permissions:
@@ -25,18 +25,9 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq wget gnupg
-          wget -q -O - https://mega.nz/linux/repo/xUbuntu_24.04/Release.key | sudo apt-key add -
-          echo "deb https://mega.nz/linux/repo/xUbuntu_24.04/ ./" | sudo tee /etc/apt/sources.list.d/mega.list
-          sudo apt-get update
-          sudo apt-get install -y megacmd
-
-      - name: Debug mega-cmd installation
-        run: |
-          echo "Checking mega-cmd installation..."
-          which mega-get || echo "mega-get not found"
-          mega-get --version || echo "mega-get version check failed"
-          ls -l /usr/bin/mega-*
+          sudo apt-get install -y jq tor
+          tor &  # Start Tor in the background
+          sleep 10  # Wait for Tor to start
 
       - name: Create downloads directory
         run: mkdir -p downloads
@@ -65,18 +56,18 @@ jobs:
 
           echo "server=$server" >> $GITHUB_ENV
 
-      - name: Process First Mega Link
+      - name: Process First 1fichier Link
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          if [ ! -f mega_download_list.txt ]; then
-            echo "No mega_download_list.txt found, exiting"
+          if [ ! -f fichier_download_list.txt ]; then
+            echo "No fichier_download_list.txt found, exiting"
             exit 0
           fi
 
-          first_link=$(head -n 1 mega_download_list.txt)
+          first_link=$(head -n 1 fichier_download_list.txt)
           if [ -z "$first_link" ]; then
-            echo "mega_download_list.txt is empty, exiting"
+            echo "fichier_download_list.txt is empty, exiting"
             exit 0
           fi
 
@@ -85,9 +76,9 @@ jobs:
           start_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           start_payload=$(jq -n --arg link "$first_link" --arg time "$start_time" '{
             embeds: [{
-              title: "📥 Starting Mega Download",
+              title: "📥 Starting 1fichier Download",
               fields: [
-                { name: "Mega Link", value: "[Mega Link](\($link))", inline: true },
+                { name: "1fichier Link", value: "\($link)", inline: true },
                 { name: "Started At", value: $time, inline: true }
               ],
               color: 5814783
@@ -95,91 +86,191 @@ jobs:
           }')
           curl -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
 
-          rm -rf downloads/*
-          success=true
+          # Set up Tor proxy
+          TOR_PROXY="socks5h://127.0.0.1:9050"
 
-          if ! mega-get "$first_link" downloads/; then
-            echo "Failed to download $first_link"
-            success=false
-            # Kirim notifikasi ke Discord kalau gagal
-            error_message=$(<mega_error.log)
-            error_payload=$(jq -n \
-              --arg link "$first_link" \
-              --arg error "$error_message" '{
+          # Function to use curl with Tor
+          tcurl() {
+            curl --proxy "$TOR_PROXY" --connect-timeout 15 --user-agent "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0" --header "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" --header "Accept-Language: en-US,en;q=0.5" --header "Accept-Encoding: gzip, deflate, br" --compressed "$@"
+          }
+
+          # Temporary directory
+          temp_dir=$(mktemp -d)
+          cookie_file=$(mktemp --tmpdir="$temp_dir" cookies.XXX)
+
+          # Try to find a circuit without wait time
+          max_count=50
+          count=0
+          slot_found=false
+          while [ $count -lt $max_count ] && [ "$slot_found" = false ]; do
+            count=$((count + 1))
+            echo "Attempt $count to find a slot..."
+
+            # Get download page
+            download_page=$(tcurl --cookie-jar "$cookie_file" --silent --show-error "$first_link")
+
+            # Check if there's a wait time or slot available
+            if ! echo "$download_page" | grep -q 'Please wait'; then
+              slot_found=true
+            fi
+          done
+
+          if [ "$slot_found" = false ]; then
+            echo "Unable to find a slot after $max_count attempts."
+            error_payload=$(jq -n --arg link "$first_link" '{
+              embeds: [{
+                title: "❌ Failed to Find Download Slot",
+                description: "Link: \($link)\nAfter 50 attempts",
+                color: 16711680
+              }]
+            }')
+            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+            # Keep the link and commit
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git add fichier_download_list.txt
+            git commit -m "Failed to process first link: $first_link"
+            git push
+            exit 1
+          fi
+
+          # Find adz value
+          adz=$(echo "$download_page" | grep -oP 'name="adz" value="\K[^"]+')
+          if [ -z "$adz" ]; then
+            echo "Could not find adz value."
+            error_payload=$(jq -n --arg link "$first_link" '{
+              embeds: [{
+                title: "❌ Failed to Extract Download Parameters",
+                description: "Link: \($link)\nCould not find adz value",
+                color: 16711680
+              }]
+            }')
+            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+            # Keep the link and commit
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git add fichier_download_list.txt
+            git commit -m "Failed to process first link: $first_link"
+            git push
+            exit 1
+          fi
+
+          # Post the form to get download link page
+          download_link_page=$(tcurl --location --cookie "$cookie_file" --cookie-jar "$cookie_file" --silent --show-error --form "submit=Download" --form "adz=$adz" "$first_link")
+
+          # Extract download link
+          download_link=$(echo "$download_link_page" | grep -oP '<a href="\K[^"]+' | head -1)
+          if [ -z "$download_link" ]; then
+            echo "Could not extract download link."
+            error_payload=$(jq -n --arg link "$first_link" '{
+              embeds: [{
+                title: "❌ Failed to Extract Download Link",
+                description: "Link: \($link)",
+                color: 16711680
+              }]
+            }')
+            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+            # Keep the link and commit
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git add fichier_download_list.txt
+            git commit -m "Failed to process first link: $first_link"
+            git push
+            exit 1
+          fi
+
+          # Download the file
+          tcurl --cookie "$cookie_file" --referer "$first_link" --output-dir "$temp_dir" --remote-name "$download_link"
+
+          # Check if download was successful
+          if [ $? -eq 0 ]; then
+            # Find the downloaded file
+            downloaded_file=$(ls "$temp_dir")
+            if [ -z "$downloaded_file" ]; then
+              echo "No file downloaded."
+              error_payload=$(jq -n --arg link "$first_link" '{
                 embeds: [{
-                  title: "❌ Failed to Download from Mega",
-                  description: "Link: \($link)\nError:\n```bash\n\($error)\n```",
+                  title: "❌ Failed to Download from 1fichier",
+                  description: "Link: \($link)\nNo file downloaded",
                   color: 16711680
                 }]
               }')
-            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-            
-          else
-            gofile_urls=()
-            for file in downloads/*; do
-              if [ -f "$file" ]; then
-                echo "Uploading $file to Gofile"
-                gofile_response=$(curl -s -F "file=@$file" https://${{ env.server }}.gofile.io/uploadFile)
-                if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
-                  gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
-                  gofile_urls+=("$gofile_url")
-                else
-                  echo "Failed to upload $file"
-                  success=false
-                fi
-                rm -f "$file"
-              fi
-            done
-
-          if [ "$success" = true ]; then
-            for url in "${gofile_urls[@]}"; do
+              curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+              # Keep the link and commit
+              git config user.name "GitHub Actions"
+              git config user.email "actions@github.com"
+              git add fichier_download_list.txt
+              git commit -m "Failed to process first link: $first_link"
+              git push
+              exit 1
+            fi
+            # Upload to Gofile
+            gofile_response=$(curl -s -F "file=@$temp_dir/$downloaded_file" https://${{ env.server }}.gofile.io/uploadFile)
+            if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
+              gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
+              # Send success notification
               upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          
-              # Buat list file yang diunduh
-              file_list=""
-              for file in downloads/*; do
-                [ -f "$file" ] && file_list="${file_list}• $(basename "$file")\n"
-              done
-              file_list=${file_list%\\n}  # Hapus newline terakhir
-          
               upload_payload=$(jq -n \
-                --arg url "$url" \
+                --arg url "$gofile_url" \
                 --arg link "$first_link" \
-                --arg time "$upload_time" \
-                --arg files "$file_list" '{
+                --arg time "$upload_time" '{
                   embeds: [{
                     title: "📤 File Uploaded to Gofile!",
-                    description: "Downloaded files:\n\($files)",
                     fields: [
                       { name: "Download Link", value: "[Download from Gofile](\($url))", inline: true },
-                      { name: "Source Mega Link", value: "[Mega Link](\($link))", inline: true },
+                      { name: "Source 1fichier Link", value: "\($link)", inline: true },
                       { name: "Uploaded At", value: $time, inline: true }
                     ],
                     color: 5814783
                   }]
                 }')
-          
               curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
-            done
-          fi
-          
-          if [ "$success" = true ]; then
-            tail -n +2 mega_download_list.txt > temp.txt
-            mv temp.txt mega_download_list.txt
-            git config user.name "GitHub Actions"
-            git config user.email "actions@github.com"
-            git add mega_download_list.txt
-            if [ -s mega_download_list.txt ]; then
-              git commit -m "Processed first link, removed from mega_download_list.txt"
+              # Remove first line from fichier_download_list.txt
+              tail -n +2 fichier_download_list.txt > temp.txt
+              mv temp.txt fichier_download_list.txt
+              git config user.name "GitHub Actions"
+              git config user.email "actions@github.com"
+              git add fichier_download_list.txt
+              if [ -s fichier_download_list.txt ]; then
+                git commit -m "Processed first link, removed from fichier_download_list.txt"
+              else
+                git commit -m "Processed last link, fichier_download_list.txt is now empty"
+              fi
+              git push
             else
-              git commit -m "Processed last link, mega_download_list.txt is now empty"
+              echo "Failed to upload to Gofile."
+              error_payload=$(jq -n --arg link "$first_link" '{
+                embeds: [{
+                  title: "❌ Failed to Upload to Gofile",
+                  description: "Link: \($link)",
+                  color: 16711680
+                }]
+              }')
+              curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+              # Keep the link and commit
+              git config user.name "GitHub Actions"
+              git config user.email "actions@github.com"
+              git add fichier_download_list.txt
+              git commit -m "Failed to process first link: $first_link"
+              git push
             fi
-            git push
           else
-            echo "First link failed, keeping mega_download_list.txt unchanged"
+            echo "Download failed."
+            error_payload=$(jq -n --arg link "$first_link" '{
+              embeds: [{
+                title: "❌ Failed to Download from 1fichier",
+                description: "Link: \($link)",
+                color: 16711680
+              }]
+            }')
+            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+            # Keep the link and commit
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
-            git add mega_download_list.txt
+            git add fichier_download_list.txt
             git commit -m "Failed to process first link: $first_link"
             git push
           fi
+
+          # Clean up
+          rm -rf "$temp_dir"
