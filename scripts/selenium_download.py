@@ -2,7 +2,6 @@ import time
 import sys
 import os
 import logging
-import tempfile
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -21,11 +20,17 @@ def setup_logging():
     return logging.getLogger()
 
 def clean_chrome_processes():
-    """Kill any existing Chrome and ChromeDriver processes."""
+    """Kill any existing Chrome and ChromeDriver processes aggressively."""
     logger = setup_logging()
     try:
-        os.system("pkill -f chromedriver")
-        os.system("pkill -f chromium")
+        # Log running Chrome processes for debugging
+        os.system("ps aux | grep -E 'chromedriver|chromium' > chrome_processes.log")
+        logger.info("Logged running Chrome processes to chrome_processes.log")
+        
+        # Kill processes with SIGKILL
+        os.system("killall -9 chromedriver >/dev/null 2>&1 || true")
+        os.system("killall -9 chromium >/dev/null 2>&1 || true")
+        time.sleep(1)  # Wait to ensure processes are terminated
         logger.info("Cleaned up existing Chrome and ChromeDriver processes")
     except Exception as e:
         logger.warning(f"Failed to clean Chrome processes: {str(e)}")
@@ -45,10 +50,6 @@ def trigger_1fichier_download(url, download_dir):
         # Clean up any existing Chrome processes
         clean_chrome_processes()
 
-        # Create a temporary user data directory
-        user_data_dir = tempfile.mkdtemp()
-        logger.info(f"Using temporary user data directory: {user_data_dir}")
-
         # Configure Chrome options
         chrome_options = Options()
         chrome_options.page_load_strategy = 'normal'
@@ -56,7 +57,7 @@ def trigger_1fichier_download(url, download_dir):
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-popup-blocking")
         chrome_options.add_argument("--disable-notifications")
-        chrome_options.add_argument(f"user-data-dir={user_data_dir}")
+        chrome_options.add_argument("--headless=new")  # Run in headless mode
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         # Set download directory and disable download prompt
         chrome_options.add_experimental_option("prefs", {
@@ -216,13 +217,6 @@ def trigger_1fichier_download(url, download_dir):
                 except Exception as e:
                     logger.warning(f"Failed to close browser: {str(e)}")
             clean_chrome_processes()
-            # Clean up user data directory
-            if os.path.exists(user_data_dir):
-                try:
-                    os.system(f"rm -rf {user_data_dir}")
-                    logger.info(f"Removed temporary user data directory: {user_data_dir}")
-                except Exception as e:
-                    logger.warning(f"Failed to remove user data directory: {str(e)}")
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
