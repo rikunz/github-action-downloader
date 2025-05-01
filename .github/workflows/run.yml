@@ -57,6 +57,7 @@ jobs:
       - name: Process First 1fichier Link
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          FICHIER_API: ${{ secrets.FICHIER_API }}
         run: |
           if [ ! -f fichier_download_list.txt ]; then
             echo "No fichier_download_list.txt found, exiting"
@@ -84,33 +85,21 @@ jobs:
           }')
           curl -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
 
+          # Clean the link (remove af= parameter if present)
+          link=$(echo "$first_link" | awk -F'&af=' '{print $1}')
+
           # Temporary directory
           temp_dir=$(mktemp -d)
-          cookie_file=$(mktemp --tmpdir="$temp_dir" cookies.XXX)
 
-          # Try to find a circuit without wait time
-          max_count=50
-          count=0
-          slot_found=false
-          while [ $count -lt $max_count ] && [ "$slot_found" = false ]; do
-            count=$((count + 1))
-            echo "Attempt $count to find a slot..."
+          # Get file info from 1fichier API
+          file_info=$(curl -s -H "Authorization: Bearer $FICHIER_API" -H "Content-Type: application/json" -X POST https://api.1fichier.com/v1/file/info.cgi -d '{"url":"'"$link"'","pretty":1}')
 
-            # Get download page
-            download_page=$(curl --cookie-jar "$cookie_file" --silent --show-error --connect-timeout 15 --user-agent "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0" --header "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8" --header "Accept-Language: en-US,en;q=0.5" --header "Accept-Encoding: gzip, deflate, br" --compressed "$first_link")
-
-            # Check if there's a wait time or slot available
-            if ! echo "$download_page" | grep -q 'Please wait'; then
-              slot_found=true
-            fi
-          done
-
-          if [ "$slot_found" = false ]; then
-            echo "Unable to find a slot after $max_count attempts."
+          if echo "$file_info" | grep -q "Resource not found"; then
+            echo "The requested file does not exist"
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
-                title: "❌ Failed to Find Download Slot",
-                description: "Link: \($link)\nAfter 50 attempts",
+                title: "❌ Failed to Download from 1fichier",
+                description: "Link: \($link)\nThe requested file does not exist",
                 color: 16711680
               }]
             }')
@@ -121,17 +110,18 @@ jobs:
             git add fichier_download_list.txt
             git commit -m "Failed to process first link: $first_link"
             git push
+            rm -rf "$temp_dir"
             exit 1
           fi
 
-          # Find adz value
-          adz=$(echo "$download_page" | grep -oP 'name="adz" value="\K[^"]+')
-          if [ -z "$adz" ]; then
-            echo "Could not find adz value."
+          # Extract filename
+          filename=$(echo "$file_info" | jq -r '.filename')
+          if [ -z "$filename" ]; then
+            echo "Could not extract filename"
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
-                title: "❌ Failed to Extract Download Parameters",
-                description: "Link: \($link)\nCould not find adz value",
+                title: "❌ Failed to Extract Filename",
+                description: "Link: \($link)\nCould not extract filename from API response",
                 color: 16711680
               }]
             }')
@@ -142,20 +132,19 @@ jobs:
             git add fichier_download_list.txt
             git commit -m "Failed to process first link: $first_link"
             git push
+            rm -rf "$temp_dir"
             exit 1
           fi
 
-          # Post the form to get download link page
-          download_link_page=$(curl --location --cookie "$cookie_file" --cookie-jar "$cookie_file" --silent --show-error --form "submit=Download" --form "adz=$adz" "$first_link")
-
-          # Extract download link
-          download_link=$(echo "$download_page" | grep -oP '<a href="\K[^"]+' | head -1)
-          if [ -z "$download_link" ]; then
-            echo "Could not extract download link."
+          # Get download token
+          url_download=$(curl -s -H "Authorization: Bearer $FICHIER_API" -H "Content-Type: application/json" -X POST https://api.1fichier.com/v1/download/get_token.cgi -d '{"url":"'"$link"'","pretty":1}')
+          final_url=$(echo "$url_download" | jq -r '.url')
+          if [ -z "$final_url" ] || [ "$final_url" = "null" ]; then
+            echo "Could not extract download URL"
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
-                title: "❌ Failed to Extract Download Link",
-                description: "Link: \($link)",
+                title: "❌ Failed to Extract Download URL",
+                description: "Link: \($link)\nCould not obtain download URL from API",
                 color: 16711680
               }]
             }')
@@ -166,36 +155,17 @@ jobs:
             git add fichier_download_list.txt
             git commit -m "Failed to process first link: $first_link"
             git push
+            rm -rf "$temp_dir"
             exit 1
           fi
 
           # Download the file
-          curl --cookie "$cookie_file" --referer "$first_link" --output-dir "$temp_dir" --remote-name "$download_link"
+          curl -C - --retry 10 --retry-delay 10 "$final_url" --output "$temp_dir/$filename"
 
           # Check if download was successful
-          if [ $? -eq 0 ]; then
-            # Find the downloaded file
-            downloaded_file=$(ls "$temp_dir")
-            if [ -z "$downloaded_file" ]; then
-              echo "No file downloaded."
-              error_payload=$(jq -n --arg link "$first_link" '{
-                embeds: [{
-                  title: "❌ Failed to Download from 1fichier",
-                  description: "Link: \($link)\nNo file downloaded",
-                  color: 16711680
-                }]
-              }')
-              curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-              # Keep the link and commit
-              git config user.name "GitHub Actions"
-              git config user.email "actions@github.com"
-              git add fichier_download_list.txt
-              git commit -m "Failed to process first link: $first_link"
-              git push
-              exit 1
-            fi
+          if [ $? -eq 0 ] && [ -f "$temp_dir/$filename" ]; then
             # Upload to Gofile
-            gofile_response=$(curl -s -F "file=@$temp_dir/$downloaded_file" https://${{ env.server }}.gofile.io/uploadFile)
+            gofile_response=$(curl -s -F "file=@$temp_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
             if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
               gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
               # Send success notification
