@@ -1,3 +1,4 @@
+```yaml
 name: 1fichier Download and Upload to Gofile with Notifications
 
 on:
@@ -374,8 +375,10 @@ jobs:
             download_success=false
             while [ $attempt -le $max_attempts ]; do
               echo "Attempt $attempt of $max_attempts: Downloading $filename..."
-              echo "curl -C - --retry 10 --retry-delay 10 -H 'Cookie: $cookies' \"$download_url\" --output \"$temp_dir/$filename\""
-              curl -C - --retry 10 --retry-delay 10 -H "Cookie: $cookies" "$download_url" --output "$temp_dir/$filename"
+              # Remove existing file to start fresh
+              rm -f "$temp_dir/$filename"
+              echo "curl --retry 10 --retry-delay 10 -H 'Cookie: $cookies' -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36' \"$download_url\" --output \"$temp_dir/$filename\""
+              curl --retry 10 --retry-delay 10 -H "Cookie: $cookies" -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36" "$download_url" --output "$temp_dir/$filename"
               download_exit_code=$?
 
               # Check if curl failed
@@ -537,3 +540,4 @@ jobs:
             extract_output.txt
             debug_download_attempt_*.bin
             debug_download_final.bin
+```
