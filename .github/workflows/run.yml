@@ -1,3 +1,4 @@
+```yaml
 name: 1fichier Download and Upload to Gofile with Notifications
 
 on:
@@ -216,9 +217,9 @@ jobs:
             fi
             echo "File size: $file_size bytes"
 
-            # Calculate chunk sizes (5 chunks)
-            chunk_size=$((file_size / 5))
-            remainder=$((file_size % 5))
+            # Calculate chunk sizes (20 chunks)
+            chunk_size=$((file_size / 20))
+            remainder=$((file_size % 20))
             if [ $remainder -ne 0 ]; then
               chunk_size=$((chunk_size + 1))
             fi
@@ -227,10 +228,10 @@ jobs:
             # Download chunks concurrently through Tor
             echo "Starting chunked download through Tor..."
             pids=()
-            for i in {0..4}; do
+            for i in {0..19}; do
               start=$((i * chunk_size))
               end=$((start + chunk_size - 1))
-              if [ $i -eq 4 ]; then
+              if [ $i -eq 19 ]; then
                 end=$((file_size - 1))  # Ensure last chunk includes remainder
               fi
               echo "Downloading chunk $i: bytes $start-$end"
@@ -248,10 +249,22 @@ jobs:
             done
 
             # Check if all chunks were downloaded
-            if [ "$download_failed" = false ] && [ -f "$temp_dir/chunk_0" ] && [ -f "$temp_dir/chunk_1" ] && [ -f "$temp_dir/chunk_2" ] && [ -f "$temp_dir/chunk_3" ] && [ -f "$temp_dir/chunk_4" ]; then
+            all_chunks_present=true
+            for i in {0..19}; do
+              if [ ! -f "$temp_dir/chunk_$i" ]; then
+                all_chunks_present=false
+                break
+              fi
+            done
+
+            if [ "$download_failed" = false ] && [ "$all_chunks_present" = true ]; then
               # Reassemble chunks
               echo "Reassembling chunks..."
-              cat "$temp_dir/chunk_0" "$temp_dir/chunk_1" "$temp_dir/chunk_2" "$temp_dir/chunk_3" "$temp_dir/chunk_4" > "$temp_dir/$filename"
+              cat "$temp_dir/chunk_0" "$temp_dir/chunk_1" "$temp_dir/chunk_2" "$temp_dir/chunk_3" "$temp_dir/chunk_4" \
+                  "$temp_dir/chunk_5" "$temp_dir/chunk_6" "$temp_dir/chunk_7" "$temp_dir/chunk_8" "$temp_dir/chunk_9" \
+                  "$temp_dir/chunk_10" "$temp_dir/chunk_11" "$temp_dir/chunk_12" "$temp_dir/chunk_13" "$temp_dir/chunk_14" \
+                  "$temp_dir/chunk_15" "$temp_dir/chunk_16" "$temp_dir/chunk_17" "$temp_dir/chunk_18" "$temp_dir/chunk_19" \
+                  > "$temp_dir/$filename"
               if [ $? -eq 0 ] && [ -f "$temp_dir/$filename" ]; then
                 # Upload to Gofile
                 gofile_response=$(curl -s -F "file=@$temp_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
@@ -362,3 +375,4 @@ jobs:
 
           # Clean up
           rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt curl_headers.txt
+```
