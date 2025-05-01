@@ -27,6 +27,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq chromium-browser chromium-chromedriver
           pip install requests beautifulsoup4 selenium
+          # Verify Chrome and ChromeDriver versions
+          chromium-browser --version
+          chromedriver --version
 
       - name: Process First 1fichier Link
         env:

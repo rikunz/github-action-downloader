@@ -2,6 +2,7 @@ import time
 import sys
 import os
 import logging
+import tempfile
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -19,6 +20,16 @@ def setup_logging():
     )
     return logging.getLogger()
 
+def clean_chrome_processes():
+    """Kill any existing Chrome and ChromeDriver processes."""
+    logger = setup_logging()
+    try:
+        os.system("pkill -f chromedriver")
+        os.system("pkill -f chromium")
+        logger.info("Cleaned up existing Chrome and ChromeDriver processes")
+    except Exception as e:
+        logger.warning(f"Failed to clean Chrome processes: {str(e)}")
+
 def trigger_1fichier_download(url, download_dir):
     logger = setup_logging()
     try:
@@ -31,6 +42,13 @@ def trigger_1fichier_download(url, download_dir):
             print(f"Error: No write permission for {download_dir}. Please check directory permissions.")
             return False, None
 
+        # Clean up any existing Chrome processes
+        clean_chrome_processes()
+
+        # Create a temporary user data directory
+        user_data_dir = tempfile.mkdtemp()
+        logger.info(f"Using temporary user data directory: {user_data_dir}")
+
         # Configure Chrome options
         chrome_options = Options()
         chrome_options.page_load_strategy = 'normal'
@@ -38,6 +56,7 @@ def trigger_1fichier_download(url, download_dir):
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-popup-blocking")
         chrome_options.add_argument("--disable-notifications")
+        chrome_options.add_argument(f"user-data-dir={user_data_dir}")
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         # Set download directory and disable download prompt
         chrome_options.add_experimental_option("prefs", {
@@ -50,8 +69,6 @@ def trigger_1fichier_download(url, download_dir):
         })
         # Enable browser logging
         chrome_options.set_capability('goog:loggingPrefs', {'browser': 'ALL', 'driver': 'ALL'})
-        # Prevent browser from closing immediately
-        chrome_options.add_experimental_option("detach", True)
 
         try:
             service = Service('/usr/bin/chromedriver', log_path="chromedriver.log")
@@ -156,7 +173,7 @@ def trigger_1fichier_download(url, download_dir):
                 print("Saved page source to debug_page.html for inspection")
                 return False, None
 
-            # Extract filename from page or URL
+            # Extract filename from page
             print("Extracting filename...")
             try:
                 filename_element = driver.find_element(By.XPATH, "//td[@class='normal'][contains(text(), '.')]")
@@ -191,13 +208,21 @@ def trigger_1fichier_download(url, download_dir):
             return False, None
 
         finally:
-            # Do not close the browser to allow download to complete
+            # Clean up browser and processes
             if 'driver' in locals():
-                browser_logs = driver.get_log('browser')
-                for entry in browser_logs:
-                    logger.debug(f"Browser log: {entry}")
-                print("Browser left open for download. Close manually when download completes.")
-                logger.info("Browser left open for download")
+                try:
+                    driver.quit()
+                    logger.info("Closed browser with driver.quit()")
+                except Exception as e:
+                    logger.warning(f"Failed to close browser: {str(e)}")
+            clean_chrome_processes()
+            # Clean up user data directory
+            if os.path.exists(user_data_dir):
+                try:
+                    os.system(f"rm -rf {user_data_dir}")
+                    logger.info(f"Removed temporary user data directory: {user_data_dir}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove user data directory: {str(e)}")
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
