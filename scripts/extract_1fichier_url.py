@@ -93,6 +93,10 @@ def get_1fichier_cookies(url):
 
 def extract_1fichier_url(url, shared_id, shared_id_cst, user_agent):
     try:
+        # Clean URL to remove control characters
+        clean_url = url.strip()
+        print(f"Cleaned URL for Referer: {clean_url}")
+
         session = requests.Session()
         cookies_dict = {
             '_sharedID': shared_id,
@@ -103,7 +107,7 @@ def extract_1fichier_url(url, shared_id, shared_id_cst, user_agent):
         headers = {
             'User-Agent': user_agent,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Referer': url
+            'Referer': clean_url
         }
 
         response = session.get(url, headers=headers, allow_redirects=True)
@@ -164,7 +168,8 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python extract_1fichier_url.py <url>")
         sys.exit(1)
-    url = sys.argv[1]
+    url = sys.argv[1].strip()  # Clean input URL
+    print(f"Received URL: {url}")
 
     shared_id, shared_id_cst, user_agent = get_1fichier_cookies(url)
     if not shared_id or not shared_id_cst or not user_agent:
