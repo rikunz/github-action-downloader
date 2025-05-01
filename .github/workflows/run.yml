@@ -35,11 +35,8 @@ jobs:
         id: gofile_server
         run: |
           response=$(curl -s https://api.gofile.io/servers)
-          echo "Raw Gofile API response: $response"
-
           preferred_zones='["asia", "eu", "na"]'
           server="store1"
-
           if echo "$response" | jq -e '.data.serversAllZone' > /dev/null 2>&1; then
             for zone in $(echo $preferred_zones | jq -r '.[]'); do
               candidate=$(echo "$response" | jq -r --arg zone "$zone" '.data.serversAllZone[] | select(.zone == $zone) | .name' | head -n 1)
@@ -48,14 +45,10 @@ jobs:
                 break
               fi
             done
-            echo "Selected server based on preferred zone: $server"
-          else
-            echo "Failed to get valid servers list, using fallback: $server"
           fi
-
           echo "server=$server" >> $GITHUB_ENV
 
-      - name: Process First 1fichier Link
+      - name: Download 1fichier File
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
@@ -71,7 +64,6 @@ jobs:
           fi
 
           echo "Processing $first_link"
-
           start_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           start_payload=$(jq -n --arg link "$first_link" --arg time "$start_time" '{
             embeds: [{
@@ -85,283 +77,30 @@ jobs:
           }')
           curl -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
 
-          # Clean the link (remove af= parameter if present)
           link=$(echo "$first_link" | awk -F'&af=' '{print $1}')
-
-          # Temporary directory
           temp_dir=$(mktemp -d)
+          touch downloaded_files.txt
 
-          # Initialize downloaded_files.txt if it doesn't exist
-          if [ ! -f downloaded_files.txt ]; then
-            touch downloaded_files.txt
-          fi
-
-          # Create Python script to extract cookies, download URL, and filename
-          cat << 'EOF' > extract_1fichier_url.py
-          import requests
-          from bs4 import BeautifulSoup
-          import sys
-          import time
-          import random
-          from selenium import webdriver
-          from selenium.webdriver.chrome.options import Options
-          from selenium.webdriver.chrome.service import Service
-          from selenium.webdriver.common.by import By
-          from selenium.webdriver.support.ui import WebDriverWait
-          from selenium.webdriver.support import expected_conditions as EC
-          from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
-
-          def get_1fichier_cookies(url):
-              try:
-                  # List of realistic User-Agents
-                  user_agents = [
-                      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-                      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-                      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0",
-                      "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
-                  ]
-                  selected_user_agent = random.choice(user_agents)
-
-                  # Set up Chrome options for headless mode
-                  chrome_options = Options()
-                  chrome_options.add_argument("--headless")
-                  chrome_options.add_argument("--no-sandbox")
-                  chrome_options.add_argument("--disable-dev-shm-usage")
-                  chrome_options.add_argument(f"user-agent={selected_user_agent}")
-                  chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-                  chrome_options.page_load_strategy = 'eager'
-
-                  # Set up ChromeDriver service
-                  try:
-                      service = Service('/usr/bin/chromedriver')
-                      driver = webdriver.Chrome(service=service, options=chrome_options)
-                  except WebDriverException as e:
-                      print(f"Error initializing ChromeDriver: {str(e)}")
-                      print("Ensure ChromeDriver is installed and the path is correct.")
-                      return None, None, None
-
-                  try:
-                      # Navigate to the provided 1fichier file URL
-                      print(f"Navigating to {url}")
-                      driver.get(url)
-
-                      # Wait for the cookie box close button (check presence only)
-                      print("Waiting for cookie box close button to be present...")
-                      try:
-                          cookie_button = WebDriverWait(driver, 10).until(
-                              EC.presence_of_element_located((By.CLASS_NAME, "cookie_box_close"))
-                          )
-                          print("Cookie box close button found, attempting to click...")
-                          try:
-                              cookie_button.click()
-                              print("Clicked cookie box close button")
-                          except Exception as e:
-                              print(f"Failed to click cookie box close button: {str(e)}")
-                              print("Proceeding to check cookies anyway...")
-                      except TimeoutException:
-                          print("Timeout waiting for cookie box close button. It may not be present or page is blocked.")
-                          print(f"Current page title: {driver.title}")
-                          print(f"Current page URL: {driver.current_url}")
-                          with open("debug_page.html", "w", encoding="utf-8") as f:
-                              f.write(driver.page_source)
-                          print("Saved page source to debug_page.html for inspection")
-                          print("Proceeding to check cookies anyway...")
-                      except NoSuchElementException:
-                          print("Cookie box close button not found on page.")
-                          print(f"Current page title: {driver.title}")
-                          print(f"Current page URL: {driver.current_url}")
-                          with open("debug_page.html", "w", encoding="utf-8") as f:
-                              f.write(driver.page_source)
-                          print("Saved page source to debug_page.html for inspection")
-                          print("Proceeding to check cookies anyway...")
-
-                      # Wait for cookies to be set
-                      print("Waiting for cookies to be set...")
-                      time.sleep(5)  # Adjust if needed
-
-                      # Extract cookies
-                      cookies = driver.get_cookies()
-                      print("Cookies received:")
-                      for cookie in cookies:
-                          print(f"{cookie['name']}={cookie['value']}")
-
-                      # Find _sharedID and _sharedID_cst
-                      shared_id = None
-                      shared_id_cst = None
-                      for cookie in cookies:
-                          if cookie['name'] == '_sharedID':
-                              shared_id = cookie['value']
-                          elif cookie['name'] == '_sharedID_cst':
-                              shared_id_cst = cookie['value']
-
-                      if shared_id and shared_id_cst:
-                          print(f"Successfully extracted cookies:")
-                          print(f"SHARED_ID={shared_id}")
-                          print(f"SHARED_ID_CST={shared_id_cst}")
-                          return shared_id, shared_id_cst, selected_user_agent
-                      else:
-                          print("Failed to find _sharedID or _sharedID_cst in cookies")
-                          print(f"Current page title: {driver.title}")
-                          print(f"Current page URL: {driver.current_url}")
-                          with open("debug_page.html", "w", encoding="utf-8") as f:
-                              f.write(driver.page_source)
-                          print("Saved page source to debug_page.html for inspection")
-                          return None, None, None
-
-                  except WebDriverException as e:
-                      print(f"Error during page navigation or interaction: {str(e)}")
-                      print(f"Current page title: {driver.title if 'driver' in locals() else 'Driver not initialized'}")
-                      print(f"Current page URL: {driver.current_url if 'driver' in locals() else 'Driver not initialized'}")
-                      if 'driver' in locals():
-                          with open("debug_page.html", "w", encoding="utf-8") as f:
-                              f.write(driver.page_source)
-                          print("Saved page source to debug_page.html for inspection")
-                      return None, None, None
-
-                  finally:
-                      if 'driver' in locals():
-                          driver.quit()
-                          print("Closed browser")
-
-              except Exception as e:
-                  print(f"Unexpected error: {str(e)}")
-                  return None, None, None
-
-          def extract_1fichier_url(url, shared_id, shared_id_cst, user_agent):
-              try:
-                  # Create a session to persist cookies
-                  session = requests.Session()
-
-                  # Add cookies from Selenium
-                  cookies_dict = {
-                      '_sharedID': shared_id,
-                      '_sharedID_cst': shared_id_cst
-                  }
-                  session.cookies.update(cookies_dict)
-
-                  # Define headers to mimic browser
-                  headers = {
-                      'User-Agent': user_agent,
-                      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                      'Accept-Language': 'en-US,en;q=0.9',
-                      'Referer': url
-                  }
-
-                  # Initial GET request
-                  response = session.get(url, headers=headers, allow_redirects=True)
-                  if response.status_code != 200:
-                      print(f"Failed to access URL: Status {response.status_code}")
-                      with open("debug_get.html", "w", encoding="utf-8") as f:
-                          f.write(response.text)
-                      return None, None, None, None
-
-                  # Save GET response HTML for debugging
-                  with open("debug_get.html", "w", encoding="utf-8") as f:
-                      f.write(response.text)
-
-                  # Parse HTML to extract adz and filename
-                  soup = BeautifulSoup(response.content, 'html.parser')
-                  adz_input = soup.find('input', {'name': 'adz'})
-                  if not adz_input:
-                      print("Could not find adz input")
-                      return None, None, None, None
-                  adz = adz_input.get('value', '')
-
-                  filename_elements = soup.find_all('td', class_='normal')
-                  if len(filename_elements) < 2:
-                      print("Could not find filename")
-                      return None, None, None, None
-                  filename = filename_elements[1].text.strip()
-
-                  # POST request to get download page
-                  cookies_dict['show_cm'] = 'no'
-                  session.cookies.update(cookies_dict)
-                  data = {"adz": adz, "did": 0, "dlinline": "on"}
-                  post_response = session.post(url, headers=headers, data=data, allow_redirects=True)
-                  if post_response.status_code != 200:
-                      print(f"POST request failed: Status {post_response.status_code}")
-                      with open("debug_post.html", "w", encoding="utf-8") as f:
-                          f.write(post_response.text)
-                      return None, None, None, None
-
-                  # Save POST response HTML for debugging
-                  with open("debug_post.html", "w", encoding="utf-8") as f:
-                      f.write(post_response.text)
-
-                  # Parse POST response to find download link
-                  soup = BeautifulSoup(post_response.content, 'html.parser')
-                  links = soup.find_all('a', class_='ok btn-general btn-orange')
-                  download_url = None
-                  for link in links:
-                      if "Click here to download the file" in link.text:
-                          download_url = link.get('href')
-                          break
-
-                  if not download_url:
-                      print("Could not find download URL")
-                      return None, None, None, None
-
-                  return download_url, filename, shared_id, shared_id_cst
-              except Exception as e:
-                  print(f"Error during extraction: {str(e)}")
-                  return None, None, None, None
-
-          if __name__ == "__main__":
-              if len(sys.argv) != 2:
-                  print("Usage: python extract_1fichier_url.py <url>")
-                  sys.exit(1)
-              url = sys.argv[1]
-
-              # Get cookies and User-Agent from 1fichier file page
-              shared_id, shared_id_cst, user_agent = get_1fichier_cookies(url)
-              if not shared_id or not shared_id_cst or not user_agent:
-                  print("Failed to get cookies or User-Agent")
-                  sys.exit(1)
-
-              # Extract download URL and filename
-              download_url, filename, shared_id, shared_id_cst = extract_1fichier_url(url, shared_id, shared_id_cst, user_agent)
-              if download_url and filename and shared_id and shared_id_cst:
-                  print(f"DOWNLOAD_URL={download_url}")
-                  print(f"FILENAME={filename}")
-                  print(f"SHARED_ID={shared_id}")
-                  print(f"SHARED_ID_CST={shared_id_cst}")
-                  print(f"USER_AGENT={user_agent}")
-              else:
-                  print("Extraction failed")
-                  sys.exit(1)
-          EOF
-
-          # Run the Python script to extract download URL, filename, cookies, and User-Agent
-          echo "Running Python script to extract download URL, filename, cookies, and User-Agent..."
-          python extract_1fichier_url.py "$link" > extract_output.txt 2>&1
+          echo "Running Python script..."
+          python scripts/extract_1fichier_url.py "$link" > extract_output.txt 2>&1
           extract_exit_code=$?
 
-          # Log the Python script output for debugging
           echo "Python script output:"
           cat extract_output.txt
 
-          # Check if Python script failed
           if [ $extract_exit_code -ne 0 ]; then
             echo "Python script failed with exit code $extract_exit_code"
-            echo "Check extract_output.txt for detailed error messages"
-            if [ -f debug_page.html ]; then
-              echo "Page source saved to debug_page.html for inspection"
-            fi
-            if [ -f debug_get.html ]; then
-              echo "GET response HTML saved to debug_get.html"
-            fi
-            if [ -f debug_post.html ]; then
-              echo "POST response HTML saved to debug_post.html"
-            fi
+            if [ -f debug_page.html ]; then echo "Saved debug_page.html"; fi
+            if [ -f debug_get.html ]; then echo "Saved debug_get.html"; fi
+            if [ -f debug_post.html ]; then echo "Saved debug_post.html"; fi
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
                 title: "❌ Failed to Extract 1fichier Download URL",
-                description: "Link: \($link)\nPython script failed. Check logs and debug files for details.",
+                description: "Link: \($link)\nCheck logs for details.",
                 color: 16711680
               }]
             }')
             curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-            # Keep the link and commit
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt downloaded_files.txt
@@ -370,185 +109,160 @@ jobs:
             exit 1
           fi
 
-          # Extract download URL, filename, cookies, and User-Agent from output
-          echo "Extracting download URL, filename, cookies, and User-Agent from output..."
           download_url=$(grep "DOWNLOAD_URL=" extract_output.txt | cut -d'=' -f2-)
           filename=$(grep "FILENAME=" extract_output.txt | cut -d'=' -f2-)
           shared_id=$(grep "SHARED_ID=" extract_output.txt | cut -d'=' -f2-)
           shared_id_cst=$(grep "SHARED_ID_CST=" extract_output.txt | cut -d'=' -f2-)
           user_agent=$(grep "USER_AGENT=" extract_output.txt | cut -d'=' -f2-)
 
-          # Check if extraction was successful
-          if [ $extract_exit_code -eq 0 ] && [ -n "$download_url" ] && [ -n "$filename" ] && [ -n "$shared_id" ] && [ -n "$shared_id_cst" ] && [ -n "$user_agent" ]; then
-            echo "Extraction successful:"
-            echo "Download URL: $download_url"
-            echo "Filename: $filename"
-            echo "Cookies: _sharedID=$shared_id; _sharedID_cst=$shared_id_cst"
-            echo "User-Agent: $user_agent"
-
-            # Create cookie string for curl
+          if [ -n "$download_url" ] && [ -n "$filename" ] && [ -n "$shared_id" ] && [ -n "$shared_id_cst" ] && [ -n "$user_agent" ]; then
+            echo "Extraction successful: $filename"
             cookies="_sharedID=$shared_id; _sharedID_cst=$shared_id_cst"
+            headers=(
+              -H "Cookie: $cookies"
+              -H "User-Agent: $user_agent"
+              -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+              -H "Referer: $link"
+            )
 
-            # Download the file with retry logic
-            echo "Starting download with retry logic..."
             max_attempts=5
             attempt=1
-            min_size=1048576  # 1MB in bytes
+            min_size=1048576
             download_success=false
             while [ $attempt -le $max_attempts ]; do
-              echo "Attempt $attempt of $max_attempts: Downloading $filename..."
-              # Remove existing file to start fresh
+              echo "Attempt $attempt of $max_attempts: Downloading $filename"
               rm -f "$temp_dir/$filename"
-              echo "curl --retry 10 --retry-delay 10 -H 'Cookie: $cookies' -H 'User-Agent: $user_agent' -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' -H 'Accept-Language: en-US,en;q=0.9' -H 'Referer: $link' \"$download_url\" --output \"$temp_dir/$filename\""
-              curl --retry 10 --retry-delay 10 -H "Cookie: $cookies" -H "User-Agent: $user_agent" -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7" -H "Accept-Language: en-US,en;q=0.9" -H "Referer: $link" "$download_url" --output "$temp_dir/$filename"
+              curl --retry 10 --retry-delay 10 "${headers[@]}" "$download_url" --output "$temp_dir/$filename"
               download_exit_code=$?
-
-              # Check if curl failed
               if [ $download_exit_code -ne 0 ]; then
                 echo "curl failed with exit code $download_exit_code"
                 break
               fi
-
-              # Check if file exists and get its size
               if [ -f "$temp_dir/$filename" ]; then
                 file_size=$(stat -c %s "$temp_dir/$filename")
-                echo "Downloaded file size: $file_size bytes"
+                echo "File size: $file_size bytes"
                 if [ $file_size -ge $min_size ]; then
-                  echo "File size is sufficient (>= $min_size bytes), proceeding..."
                   download_success=true
                   break
                 else
-                  echo "File size is too small (< $min_size bytes), retrying..."
-                  # Save the small file for debugging
+                  echo "File too small, retrying..."
                   cp "$temp_dir/$filename" "debug_download_attempt_$attempt.bin"
                 fi
               else
-                echo "File was not downloaded, retrying..."
+                echo "File not downloaded, retrying..."
               fi
-
               attempt=$((attempt + 1))
-              sleep 5  # Wait before retrying
+              sleep 5
             done
 
-            # Check if download was successful
             if [ "$download_success" = true ]; then
-              echo "Download successful, uploading to Gofile..."
-              # Upload to Gofile
-              gofile_response=$(curl -s -F "file=@$temp_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
-              if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
-                gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
-                # Append filename to downloaded_files.txt
-                echo "- $filename" >> downloaded_files.txt
-                # Use current filename for notification
-                file_list="- $filename"
-                # Send success notification
-                upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-                upload_payload=$(jq -n \
-                  --arg url "$gofile_url" \
-                  --arg link "$first_link" \
-                  --arg time "$upload_time" \
-                  --arg files "$file_list" '{
-                    embeds: [{
-                      title: "📤 File Uploaded to Gofile!",
-                      description: "Downloaded file:\n\($files)",
-                      fields: [
-                        { name: "Download Link", value: "[Download from Gofile](\($url))", inline: true },
-                        { name: "Source 1fichier Link", value: "\($link)", inline: true },
-                        { name: "Uploaded At", value: $time, inline: true }
-                      ],
-                      color: 5814783
-                    }]
-                  }')
-                curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
-                # Remove first line from fichier_download_list.txt
-                tail -n +2 fichier_download_list.txt > temp.txt
-                mv temp.txt fichier_download_list.txt
-                git config user.name "GitHub Actions"
-                git config user.email "actions@github.com"
-                git add fichier_download_list.txt downloaded_files.txt
-                if [ -s fichier_download_list.txt ]; then
-                  git commit -m "Processed first link, removed from fichier_download_list.txt, updated downloaded_files.txt"
-                else
-                  git commit -m "Processed last link, fichier_download_list.txt is now empty, updated downloaded_files.txt"
-                fi
-                git push
-              else
-                echo "Failed to upload to Gofile."
-                error_payload=$(jq -n --arg link "$first_link" '{
-                  embeds: [{
-                    title: "❌ Failed to Upload to Gofile",
-                    description: "Link: \($link)",
-                    color: 16711680
-                  }]
-                }')
-                curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-                # Keep the link and commit
-                git config user.name "GitHub Actions"
-                git config user.email "actions@github.com"
-                git add fichier_download_list.txt downloaded_files.txt
-                git commit -m "Failed to process first link: $first_link"
-                git push
-              fi
+              echo "Download successful, saving temp_dir and filename"
+              echo "TEMP_DIR=$temp_dir" >> $GITHUB_ENV
+              echo "FILENAME=$filename" >> $GITHUB_ENV
             else
-              echo "Download failed after $max_attempts attempts or due to curl error (exit code $download_exit_code)"
-              if [ -f debug_get.html ]; then
-                echo "GET response HTML saved to debug_get.html"
-              fi
-              if [ -f debug_post.html ]; then
-                echo "POST response HTML saved to debug_post.html"
-              fi
-              if [ -f debug_page.html ]; then
-                echo "Page source saved to debug_page.html for inspection"
-              fi
-              # Save the last downloaded file (if any) for debugging
+              echo "Download failed after $max_attempts attempts or curl error (exit code $download_exit_code)"
               if [ -f "$temp_dir/$filename" ]; then
                 cp "$temp_dir/$filename" "debug_download_final.bin"
-                echo "Saved last downloaded file to debug_download_final.bin"
               fi
+              if [ -f debug_get.html ]; then echo "Saved debug_get.html"; fi
+              if [ -f debug_post.html ]; then echo "Saved debug_post.html"; fi
+              if [ -f debug_page.html ]; then echo "Saved debug_page.html"; fi
               error_payload=$(jq -n --arg link "$first_link" '{
                 embeds: [{
                   title: "❌ Failed to Download from 1fichier",
-                  description: "Link: \($link)\nCheck logs and debug files for details.",
+                  description: "Link: \($link)\nCheck logs for details.",
                   color: 16711680
                 }]
               }')
               curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-              # Keep the link and commit
               git config user.name "GitHub Actions"
               git config user.email "actions@github.com"
               git add fichier_download_list.txt downloaded_files.txt
               git commit -m "Failed to process first link: $first_link"
               git push
+              exit 1
             fi
           else
-            echo "Failed to extract download URL, filename, cookies, or User-Agent."
-            if [ -f debug_get.html ]; then
-              echo "GET response HTML saved to debug_get.html"
-            fi
-            if [ -f debug_post.html ]; then
-              echo "POST response HTML saved to debug_post.html"
-            fi
-            if [ -f debug_page.html ]; then
-              echo "Page source saved to debug_page.html for inspection"
-            fi
+            echo "Failed to extract download URL, filename, cookies, or User-Agent"
+            if [ -f debug_get.html ]; then echo "Saved debug_get.html"; fi
+            if [ -f debug_post.html ]; then echo "Saved debug_post.html"; fi
+            if [ -f debug_page.html ]; then echo "Saved debug_page.html"; fi
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
                 title: "❌ Failed to Extract 1fichier Download URL",
-                description: "Link: \($link)\nCheck logs and debug files for details. Possible CAPTCHA or anti-bot measures detected.",
+                description: "Link: \($link)\nCheck logs for details.",
                 color: 16711680
               }]
             }')
             curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-            # Keep the link and commit
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt downloaded_files.txt
             git commit -m "Failed to process first link: $first_link"
             git push
+            exit 1
+          fi
+
+      - name: Upload to Gofile
+        if: env.TEMP_DIR != '' && env.FILENAME != ''
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          echo "Uploading ${{ env.FILENAME }} to Gofile..."
+          gofile_response=$(curl -s -F "file=@${{ env.TEMP_DIR }}/${{ env.FILENAME }}" https://${{ env.server }}.gofile.io/uploadFile)
+          if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
+            gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
+            echo "- ${{ env.FILENAME }}" >> downloaded_files.txt
+            file_list="- ${{ env.FILENAME }}"
+            upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            upload_payload=$(jq -n \
+              --arg url "$gofile_url" \
+              --arg link "$(head -n 1 fichier_download_list.txt)" \
+              --arg time "$upload_time" \
+              --arg files "$file_list" '{
+                embeds: [{
+                  title: "📤 File Uploaded to Gofile!",
+                  description: "Downloaded file:\n\($files)",
+                  fields: [
+                    { name: "Download Link", value: "[Download from Gofile](\($url))", inline: true },
+                    { name: "Source 1fichier Link", value: "\($link)", inline: true },
+                    { name: "Uploaded At", value: $time, inline: true }
+                  ],
+                  color: 5814783
+                }]
+              }')
+            curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
+            tail -n +2 fichier_download_list.txt > temp.txt
+            mv temp.txt fichier_download_list.txt
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git add fichier_download_list.txt downloaded_files.txt
+            if [ -s fichier_download_list.txt ]; then
+              git commit -m "Processed first link, updated lists"
+            else
+              git commit -m "Processed last link, lists updated"
+            fi
+            git push
+          else
+            echo "Failed to upload to Gofile"
+            error_payload=$(jq -n --arg link "$(head -n 1 fichier_download_list.txt)" '{
+              embeds: [{
+                title: "❌ Failed to Upload to Gofile",
+                description: "Link: \($link)",
+                color: 16711680
+              }]
+            }')
+            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+            git config user.name "GitHub Actions"
+            git config user.email "actions@github.com"
+            git add fichier_download_list.txt downloaded_files.txt
+            git commit -m "Failed to process first link"
+            git push
+            exit 1
           fi
 
           # Clean up
-          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt
+          rm -rf "${{ env.TEMP_DIR }}" extract_output.txt
 
       - name: Upload debug artifacts
         if: failure()
