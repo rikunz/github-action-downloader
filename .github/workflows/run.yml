@@ -520,3 +520,14 @@ jobs:
 
           # Clean up
           rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt debug_get.html debug_post.html debug_page.html
+
+      - name: Upload debug artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-files
+          path: |
+            debug_page.html
+            debug_get.html
+            debug_post.html
+            extract_output.txt
