@@ -26,6 +26,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
+          pip install requests beautifulsoup4
 
       - name: Create downloads directory
         run: mkdir -p downloads
@@ -57,7 +58,6 @@ jobs:
       - name: Process First 1fichier Link
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          FICHIER_API: ${{ secrets.FICHIER_API }}
         run: |
           if [ ! -f fichier_download_list.txt ]; then
             echo "No fichier_download_list.txt found, exiting"
@@ -91,79 +91,94 @@ jobs:
           # Temporary directory
           temp_dir=$(mktemp -d)
 
-          # Get file info from 1fichier API
-          file_info=$(curl -s -H "Authorization: Bearer $FICHIER_API" -H "Content-Type: application/json" -X POST https://api.1fichier.com/v1/file/info.cgi -d '{"url":"'"$link"'","pretty":1}')
+          # Create Python script for downloading
+          cat << 'EOF' > download_1fichier.py
+          import requests
+          from bs4 import BeautifulSoup
+          import sys
+          import os
 
-          if echo "$file_info" | grep -q "Resource not found"; then
-            echo "The requested file does not exist"
-            error_payload=$(jq -n --arg link "$first_link" '{
-              embeds: [{
-                title: "❌ Failed to Download from 1fichier",
-                description: "Link: \($link)\nThe requested file does not exist",
-                color: 16711680
-              }]
-            }')
-            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-            # Keep the link and commit
-            git config user.name "GitHub Actions"
-            git config user.email "actions@github.com"
-            git add fichier_download_list.txt
-            git commit -m "Failed to process first link: $first_link"
-            git push
-            rm -rf "$temp_dir"
-            exit 1
-          fi
+          def download_1fichier(url, output_dir):
+              try:
+                  # Initial GET request
+                  response = requests.get(url)
+                  if response.status_code != 200:
+                      print(f"Failed to access URL: Status {response.status_code}")
+                      return None, None
 
-          # Extract filename
-          filename=$(echo "$file_info" | jq -r '.filename')
-          if [ -z "$filename" ]; then
-            echo "Could not extract filename"
-            error_payload=$(jq -n --arg link "$first_link" '{
-              embeds: [{
-                title: "❌ Failed to Extract Filename",
-                description: "Link: \($link)\nCould not extract filename from API response",
-                color: 16711680
-              }]
-            }')
-            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-            # Keep the link and commit
-            git config user.name "GitHub Actions"
-            git config user.email "actions@github.com"
-            git add fichier_download_list.txt
-            git commit -m "Failed to process first link: $first_link"
-            git push
-            rm -rf "$temp_dir"
-            exit 1
-          fi
+                  # Parse HTML to extract adz and filename
+                  soup = BeautifulSoup(response.content, 'html.parser')
+                  adz_input = soup.find_all('input')
+                  if not adz_input:
+                      print("Could not find adz input")
+                      return None, None
+                  adz = str(adz_input[0]).replace('<input name="adz" type="hidden" value="', '').replace('"/>', '')
 
-          # Get download token
-          url_download=$(curl -s -H "Authorization: Bearer $FICHIER_API" -H "Content-Type: application/json" -X POST https://api.1fichier.com/v1/download/get_token.cgi -d '{"url":"'"$link"'","pretty":1}')
-          final_url=$(echo "$url_download" | jq -r '.url')
-          if [ -z "$final_url" ] || [ "$final_url" = "null" ]; then
-            echo "Could not extract download URL"
-            error_payload=$(jq -n --arg link "$first_link" '{
-              embeds: [{
-                title: "❌ Failed to Extract Download URL",
-                description: "Link: \($link)\nCould not obtain download URL from API",
-                color: 16711680
-              }]
-            }')
-            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-            # Keep the link and commit
-            git config user.name "GitHub Actions"
-            git config user.email "actions@github.com"
-            git add fichier_download_list.txt
-            git commit -m "Failed to process first link: $first_link"
-            git push
-            rm -rf "$temp_dir"
-            exit 1
-          fi
+                  filename_elements = soup.find_all('td', class_='normal')
+                  if len(filename_elements) < 2:
+                      print("Could not find filename")
+                      return None, None
+                  filename = str(filename_elements[1]).replace('<td class="normal">', '').replace('</td>', '')
 
-          # Download the file
-          curl -C - --retry 10 --retry-delay 10 "$final_url" --output "$temp_dir/$filename"
+                  # POST request to get download link
+                  data = {"adz": adz, "did": 0, "dlinline": "on"}
+                  post_response = requests.post(url, data=data)
+                  if post_response.status_code != 200:
+                      print(f"POST request failed: Status {post_response.status_code}")
+                      return None, None
+
+                  # Parse POST response to find download link
+                  soup = BeautifulSoup(post_response.content, 'html.parser')
+                  links = soup.find_all('a')
+                  target_text = "Click here to download the file"
+                  download_url = None
+                  for link in links:
+                      if target_text in str(link):
+                          download_url = str(link).replace('<a class="ok btn-general btn-orange" href="', '').replace('" style="float:none;margin:auto;font-weight:bold;padding: 10px;margin: 10px;font-size:+1.6em;border:2px solid red">Click here to download the file</a>', '')
+                          break
+
+                  if not download_url:
+                      print("Could not find download URL")
+                      return None, None
+
+                  # Download the file
+                  output_path = os.path.join(output_dir, filename)
+                  with requests.get(download_url, stream=True) as r:
+                      if r.status_code != 200:
+                          print(f"Download failed: Status {r.status_code}")
+                          return None, None
+                      with open(output_path, 'wb') as f:
+                          for chunk in r.iter_content(chunk_size=8192):
+                              if chunk:
+                                  f.write(chunk)
+                  return output_path, filename
+              except Exception as e:
+                  print(f"Error during download: {str(e)}")
+                  return None, None
+
+          if __name__ == "__main__":
+              if len(sys.argv) != 3:
+                  print("Usage: python download_1fichier.py <url> <output_dir>")
+                  sys.exit(1)
+              url = sys.argv[1]
+              output_dir = sys.argv[2]
+              output_path, filename = download_1fichier(url, output_dir)
+              if output_path:
+                  print(f"Downloaded: {output_path}")
+              else:
+                  print("Download failed")
+                  sys.exit(1)
+          EOF
+
+          # Run the Python script to download the file
+          python download_1fichier.py "$link" "$temp_dir" > download_output.txt 2>&1
+          download_exit_code=$?
+
+          # Extract filename from output
+          filename=$(grep "Downloaded:" download_output.txt | awk -F'Downloaded: ' '{print $2}' | xargs -n 1 basename)
 
           # Check if download was successful
-          if [ $? -eq 0 ] && [ -f "$temp_dir/$filename" ]; then
+          if [ $download_exit_code -eq 0 ] && [ -n "$filename" ] && [ -f "$temp_dir/$filename" ]; then
             # Upload to Gofile
             gofile_response=$(curl -s -F "file=@$temp_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
             if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
@@ -216,10 +231,11 @@ jobs:
             fi
           else
             echo "Download failed."
+            cat download_output.txt
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
                 title: "❌ Failed to Download from 1fichier",
-                description: "Link: \($link)",
+                description: "Link: \($link)\nCheck logs for details",
                 color: 16711680
               }]
             }')
@@ -233,4 +249,4 @@ jobs:
           fi
 
           # Clean up
-          rm -rf "$temp_dir"
+          rm -rf "$temp_dir" download_1fichier.py download_output.txt
