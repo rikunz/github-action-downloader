@@ -91,31 +91,7 @@ jobs:
             exit 1
           fi
 
-          echo "Extracting filename from 1fichier..."
-          python scripts/extract_1fichier_url.py "$link" > extract_output.txt 2>&1
-          extract_exit_code=$?
-
-          filename=$(grep "FILENAME=" extract_output.txt | cut -d'=' -f2-)
-          if [ $extract_exit_code -ne 0 ] || [ -z "$filename" ]; then
-            echo "Failed to extract filename from 1fichier."
-            cat extract_output.txt
-            error_payload=$(jq -n --arg link "$first_link" '{
-              embeds: [{
-                title: "❌ Failed to Extract Filename from 1fichier",
-                description: "Link: \($link)\nCheck logs for details",
-                color: 16711680
-              }]
-            }')
-            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-            git config user.name "GitHub Actions"
-            git config user.email "actions@github.com"
-            git add fichier_download_list.txt
-            git commit -m "Failed to process first link: $first_link"
-            git push
-            exit 1
-          fi
-
-          echo "Monitoring download progress for $filename..."
+          echo "Monitoring download progress..."
           download_complete=false
           timeout=1800
           elapsed=0
@@ -125,14 +101,19 @@ jobs:
               file=$(ls "$temp_dir"/*.crdownload 2>/dev/null | head -n 1)
               size=$(stat -c %s "$file" 2>/dev/null || echo 0)
               echo "Progress: File $file, Size: $size bytes"
-            elif [ -f "$temp_dir/$filename" ]; then
-              size=$(stat -c %s "$temp_dir/$filename")
-              if [ $size -ge $min_size ]; then
-                echo "Download complete: $filename, Size: $size bytes"
-                download_complete=true
-                break
+            elif ls "$temp_dir"/* >/dev/null 2>&1; then
+              filename=$(ls "$temp_dir" | grep -v '\.crdownload' | head -n 1)
+              if [ -n "$filename" ]; then
+                size=$(stat -c %s "$temp_dir/$filename")
+                if [ $size -ge $min_size ]; then
+                  echo "Download complete: $filename, Size: $size bytes"
+                  download_complete=true
+                  break
+                else
+                  echo "File $filename found but too small ($size bytes), waiting..."
+                fi
               else
-                echo "File $filename found but too small ($size bytes), waiting..."
+                echo "Waiting for download to complete..."
               fi
             else
               echo "Waiting for download to start..."
@@ -194,7 +175,6 @@ jobs:
           else
             echo "Download failed or timed out."
             cat selenium_output.txt
-            cat extract_output.txt
             if [ -f debug_page.html ]; then echo "Saved debug_page.html"; fi
             if [ -f selenium_download.log ]; then echo "Saved selenium_download.log"; fi
             if [ -f chromedriver.log ]; then echo "Saved chromedriver.log"; fi
@@ -215,7 +195,7 @@ jobs:
             exit 1
           fi
 
-          rm -rf "$temp_dir" selenium_output.txt extract_output.txt
+          rm -rf "$temp_dir" selenium_output.txt
 
       - name: Upload debug files
         if: failure()
@@ -227,4 +207,3 @@ jobs:
             selenium_download.log
             chromedriver.log
             chrome_processes.log
-            extract_output.txt

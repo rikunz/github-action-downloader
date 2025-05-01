@@ -183,14 +183,6 @@ def trigger_1fichier_download(url, download_dir):
                 print("Saved page source to debug_page.html for inspection")
             return False
 
-        finally:
-            if 'driver' in locals():
-                try:
-                    driver.quit()
-                    logger.info("Closed browser with driver.quit()")
-                except Exception as e:
-                    logger.warning(f"Failed to close browser: {str(e)}")
-            clean_chrome_processes()
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
