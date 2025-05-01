@@ -103,15 +103,6 @@ def trigger_1fichier_download(url, download_dir):
             driver = webdriver.Chrome(service=service, options=chrome_options)
             logger.info("Initialized ChromeDriver")
             print("Initialized ChromeDriver")
-            # Verifikasi direktori unduhan
-            prefs = driver.execute_script("return window.chrome.prefs")
-            actual_download_dir = prefs.get('download', {}).get('default_directory', 'Unknown')
-            print(f"Download directory set to: {actual_download_dir}")
-            logger.info(f"Download directory set to: {actual_download_dir}")
-            if actual_download_dir != download_dir:
-                print(f"Warning: Download directory mismatch! Expected {download_dir}, got {actual_download_dir}")
-                logger.warning(f"Download directory mismatch: Expected {download_dir}, got {actual_download_dir}")
-            # Ambil screenshot awal
             try:
                 driver.save_screenshot("initial_screenshot.png")
                 print("Saved initial screenshot to initial_screenshot.png")
