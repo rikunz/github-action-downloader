@@ -96,7 +96,7 @@ jobs:
             touch downloaded_files.txt
           fi
 
-          # Create Python script to extract download URL, filename, cookies, and all response headers
+          # Create Python script to extract download URL, filename, cookies, and essential headers
           cat << 'EOF' > extract_1fichier_url.py
           import requests
           from bs4 import BeautifulSoup
@@ -112,18 +112,18 @@ jobs:
                       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                       "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                       "Accept-Language": "en-US,en;q=0.9",
-                      "Referer": "https://1fichier.com/",
                       "Connection": "keep-alive"
                   })
 
                   # Initial GET request
-                  response = session.get(url)
+                  response = session.get(url, allow_redirects=True)
                   if response.status_code != 200:
                       print(f"Failed to access URL: Status {response.status_code}")
                       return None, None, None, None
 
-                  # Collect headers from GET response
-                  get_headers = dict(response.headers)
+                  # Log raw Set-Cookie headers from GET response
+                  get_cookies = response.headers.get('Set-Cookie', 'None')
+                  print(f"GET Set-Cookie: {get_cookies}")
 
                   # Parse HTML to extract adz and filename
                   soup = BeautifulSoup(response.content, 'html.parser')
@@ -141,13 +141,14 @@ jobs:
 
                   # POST request to get download page
                   data = {"adz": adz, "did": 0, "dlinline": "on"}
-                  post_response = session.post(url, data=data)
+                  post_response = session.post(url, data=data, allow_redirects=True)
                   if post_response.status_code != 200:
                       print(f"POST request failed: Status {post_response.status_code}")
                       return None, None, None, None
 
-                  # Collect headers from POST response
-                  post_headers = dict(post_response.headers)
+                  # Log raw Set-Cookie headers from POST response
+                  post_cookies = post_response.headers.get('Set-Cookie', 'None')
+                  print(f"POST Set-Cookie: {post_cookies}")
 
                   # Parse POST response to find download link
                   soup = BeautifulSoup(post_response.content, 'html.parser')
@@ -167,45 +168,18 @@ jobs:
                   cookies = "; ".join([f"{key}={value}" for key, value in session.cookies.get_dict().items()])
                   if not cookies:
                       cookies = ""
+                      print("Warning: No cookies captured from session")
 
-                  # Combine headers from GET and POST, prioritizing POST
-                  all_headers = {**get_headers, **post_headers}
-                  # Filter out suspicious headers
-                  filtered_headers = {}
-                  exclude_patterns = [
-                      r'python-requests',
-                      r'powered\s*by',
-                      r'server',
-                      r'x-powered-by',
-                      r'x-.*',  # Exclude headers starting with X- (often server-specific)
-                      r'via',
-                      r'cf-.*'  # Exclude Cloudflare-specific headers
-                  ]
-                  for key, value in all_headers.items():
-                      exclude = False
-                      key_lower = key.lower()
-                      value_lower = str(value).lower()
-                      for pattern in exclude_patterns:
-                          if re.search(pattern, key_lower) or re.search(pattern, value_lower):
-                              exclude = True
-                              break
-                      if not exclude:
-                          filtered_headers[key] = value
-
-                  # Add essential browser-like headers if missing
-                  if "User-Agent" not in filtered_headers:
-                      filtered_headers["User-Agent"] = session.headers["User-Agent"]
-                  if "Accept" not in filtered_headers:
-                      filtered_headers["Accept"] = session.headers["Accept"]
-                  if "Accept-Language" not in filtered_headers:
-                      filtered_headers["Accept-Language"] = session.headers["Accept-Language"]
-                  if "Referer" not in filtered_headers:
-                      filtered_headers["Referer"] = url
-                  if "Connection" not in filtered_headers:
-                      filtered_headers["Connection"] = "keep-alive"
+                  # Define essential headers (no Referer)
+                  headers = {
+                      "User-Agent": session.headers["User-Agent"],
+                      "Accept": session.headers["Accept"],
+                      "Accept-Language": session.headers["Accept-Language"],
+                      "Connection": "keep-alive"
+                  }
 
                   # Format headers for curl
-                  headers_str = " ".join([f"-H \"{key}: {value}\"" for key, value in filtered_headers.items()])
+                  headers_str = " ".join([f"-H \"{key}: {value}\"" for key, value in headers.items()])
 
                   return download_url, filename, cookies, headers_str
               except Exception as e:
@@ -243,7 +217,25 @@ jobs:
             # Log the download URL, cookies, and headers
             echo "Download URL: $download_url"
             echo "Cookies: $cookies"
-            echo "Headers: $headers"
+            echo "Headers (raw): $headers"
+            # Format headers for better readability
+            echo "Headers (formatted):"
+            echo "$headers" | grep -o -E '-H "[^"]+"' | sed 's/-H "//; s/"$//' | while IFS= read -r header; do
+              echo "  $header"
+            done
+
+            # Warn if cookies are empty
+            if [ -z "$cookies" ]; then
+              echo "Warning: No cookies captured. Download may fail if cookies are required."
+              warning_payload=$(jq -n --arg link "$first_link" '{
+                embeds: [{
+                  title: "⚠️ No Cookies Captured",
+                  description: "Link: \($link)\nNo cookies were captured during extraction. This may indicate an issue with 1fichier (e.g., CAPTCHA or anti-bot measures). Check logs for details.",
+                  color: 16776960
+                }]
+              }')
+              curl -X POST -H "Content-Type: application/json" -d "$warning_payload" "$DISCORD_WEBHOOK_URL"
+            fi
 
             # Download the file using curl with cookies and headers
             echo "Starting download..."
@@ -333,7 +325,7 @@ jobs:
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
                 title: "❌ Failed to Extract 1fichier Download URL",
-                description: "Link: \($link)\nCheck logs for details",
+                description: "Link: \($link)\nCheck logs for details. Possible CAPTCHA or anti-bot measures detected.",
                 color: 16711680
               }]
             }')
