@@ -362,7 +362,7 @@ jobs:
 
             # Download the file using curl with only cookies
             echo "Starting download..."
-            echo "curl -C - --retry 10 --retry-delay 10 -H 'Cookie: $cookies' \"$download_url\" --output \"$temp_dir/$filename\""
+            echo "curl -C - --retry 10 --retry-delay 10 \"$download_url\" --output \"$temp_dir/$filename\""
             curl -C - --retry 10 --retry-delay 10 -H "Cookie: $cookies" "$download_url" --output "$temp_dir/$filename"
             download_exit_code=$?
 
