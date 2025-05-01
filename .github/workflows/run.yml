@@ -1,3 +1,4 @@
+```yaml
 name: 1fichier Download and Upload to Gofile with Notifications
 
 on:
@@ -169,7 +170,49 @@ jobs:
 
           # Check if extraction was successful
           if [ $extract_exit_code -eq 0 ] && [ -n "$download_url" ] && [ -n "$filename" ]; then
+            # Log the download URL
+            echo "Download URL: $download_url"
+
+            # Check if the server supports range requests
+            echo "Checking if range requests are supported..."
+            curl_headers=$(curl -I "$download_url" 2>/dev/null)
+            echo "$curl_headers" > curl_headers.txt
+            echo "HEAD response:"
+            cat curl_headers.txt
+
+            # Check for Accept-Ranges: bytes
+            if echo "$curl_headers" | grep -i "Accept-Ranges:.*bytes" > /dev/null; then
+              echo "Range requests are supported (Accept-Ranges: bytes found)."
+            else
+              echo "Range requests may not be supported (Accept-Ranges: bytes not found)."
+              # Test a small range request to confirm
+              test_range_file="$temp_dir/test_range"
+              curl -r 0-1023 "$download_url" --output "$test_range_file" 2>/dev/null
+              if [ $? -eq 0 ] && [ -f "$test_range_file" ] && [ -s "$test_range_file" ]; then
+                echo "Range request test succeeded (server supports range requests)."
+                rm -f "$test_range_file"
+              else
+                echo "Range request test failed. Server does not support range requests."
+                error_payload=$(jq -n --arg link "$first_link" '{
+                  embeds: [{
+                    title: "❌ Range Requests Not Supported",
+                    description: "Link: \($link)\nServer does not support byte range requests",
+                    color: 16711680
+                  }]
+                }')
+                curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+                git config user.name "GitHub Actions"
+                git config user.email "actions@github.com"
+                git add fichier_download_list.txt
+                git commit -m "Failed to process first link: $first_link (range requests not supported)"
+                git push
+                rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt curl_headers.txt
+                exit 1
+              fi
+            fi
+
             # Download the file using curl
+            echo "Starting download..."
             curl -C - --retry 10 --retry-delay 10 "$download_url" --output "$temp_dir/$filename"
             download_exit_code=$?
 
@@ -263,4 +306,5 @@ jobs:
           fi
 
           # Clean up
-          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt
+          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt curl_headers.txt
+```
