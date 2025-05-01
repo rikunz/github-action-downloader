@@ -25,8 +25,13 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq chromium-browser chromium-chromedriver
-          pip install requests beautifulsoup4 selenium
+          sudo apt-get install -y jq
+          # Install Node.js and npm
+          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          # Install Puppeteer dependencies
+          sudo apt-get install -y chromium-browser
+          npm install puppeteer
 
       - name: Create downloads directory
         run: mkdir -p downloads
@@ -96,130 +101,118 @@ jobs:
             touch downloaded_files.txt
           fi
 
-          # Create Python script to extract download URL, filename, cookies (via Selenium), and essential headers
-          cat << 'EOF' > extract_1fichier_url.py
-          import requests
-          from bs4 import BeautifulSoup
-          from selenium import webdriver
-          from selenium.webdriver.chrome.options import Options
-          from selenium.webdriver.common.by import By
-          from selenium.webdriver.support.ui import WebDriverWait
-          from selenium.webdriver.support import expected_conditions as EC
-          import sys
-          import time
+          # Create Node.js script to extract download URL, filename, cookies, and headers using Puppeteer
+          cat << 'EOF' > extract_1fichier_url.js
+          const puppeteer = require('puppeteer');
 
-          def extract_1fichier_url(url):
-              try:
-                  # Set up Selenium with headless Chrome
-                  chrome_options = Options()
-                  chrome_options.add_argument("--headless")
-                  chrome_options.add_argument("--no-sandbox")
-                  chrome_options.add_argument("--disable-dev-shm-usage")
-                  chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                  driver = webdriver.Chrome(options=chrome_options)
+          async function extract1fichierUrl(url) {
+            let browser;
+            try {
+              // Launch headless Chrome
+              browser = await puppeteer.launch({
+                executablePath: '/usr/bin/chromium-browser',
+                headless: true,
+                args: ['--no-sandbox', '--disable-dev-shm-usage']
+              });
+              const page = await browser.newPage();
 
-                  try:
-                      # Load the page with Selenium
-                      driver.get(url)
-                      print("Loaded page with Selenium")
+              // Set User-Agent
+              await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-                      # Wait for the page to load and check for adz input
-                      WebDriverWait(driver, 10).until(
-                          EC.presence_of_element_located((By.TAG_NAME, "input"))
-                      )
+              // Navigate to the URL
+              console.log('Loading page with Puppeteer');
+              await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
 
-                      # Extract cookies from Selenium
-                      cookies = driver.get_cookies()
-                      cookies_str = "; ".join([f"{cookie['name']}={cookie['value']}" for cookie in cookies])
-                      if not cookies_str:
-                          cookies_str = ""
-                          print("Warning: No cookies captured from Selenium")
+              // Wait for adz input
+              await page.waitForSelector('input[name="adz"]', { timeout: 10000 }).catch(() => {
+                console.error('Could not find adz input');
+                throw new Error('Could not find adz input');
+              });
 
-                      # Get page source for parsing with requests/BeautifulSoup
-                      page_source = driver.page_source
-                  finally:
-                      driver.quit()
+              // Extract adz value
+              const adz = await page.$eval('input[name="adz"]', input => input.value);
+              if (!adz) {
+                console.error('Adz value is empty');
+                throw new Error('Adz value is empty');
+              }
 
-                  # Parse HTML with BeautifulSoup (faster than Selenium for parsing)
-                  soup = BeautifulSoup(page_source, 'html.parser')
-                  adz_input = soup.find_all('input')
-                  if not adz_input:
-                      print("Could not find adz input")
-                      return None, None, None, None
-                  adz = str(adz_input[0]).replace('<input name="adz" type="hidden" value="', '').replace('"/>', '')
+              // Extract filename
+              const filename = await page.$eval('td.normal:nth-child(2)', td => td.textContent.trim());
+              if (!filename) {
+                console.error('Could not find filename');
+                throw new Error('Could not find filename');
+              }
 
-                  filename_elements = soup.find_all('td', class_='normal')
-                  if len(filename_elements) < 2:
-                      print("Could not find filename")
-                      return None, None, None, None
-                  filename = str(filename_elements[1]).replace('<td class="normal">', '').replace('</td>', '')
+              // Perform POST request equivalent by submitting the form
+              const postResponse = await page.evaluate(async (adz, url) => {
+                const response = await fetch(url, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                  body: new URLSearchParams({
+                    adz: adz,
+                    did: '0',
+                    dlinline: 'on'
+                  }).toString()
+                });
+                return await response.text();
+              }, adz, url);
 
-                  # Use requests for POST to get download page (faster than Selenium)
-                  session = requests.Session()
-                  session.headers.update({
-                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                      "Accept-Language": "en-US,en;q=0.9",
-                      "Connection": "keep-alive"
-                  })
-                  # Set cookies from Selenium in the requests session
-                  for cookie in cookies:
-                      session.cookies.set(cookie['name'], cookie['value'])
+              // Parse the POST response to find the download link
+              const downloadLinkMatch = postResponse.match(/<a class="ok btn-general btn-orange" href="([^"]+)"/);
+              const downloadUrl = downloadLinkMatch ? downloadLinkMatch[1] : null;
+              if (!downloadUrl) {
+                console.error('Could not find download URL');
+                throw new Error('Could not find download URL');
+              }
 
-                  data = {"adz": adz, "did": 0, "dlinline": "on"}
-                  post_response = session.post(url, data=data, allow_redirects=True)
-                  if post_response.status_code != 200:
-                      print(f"POST request failed: Status {post_response.status_code}")
-                      return None, None, None, None
+              // Extract cookies
+              const cookies = await page.cookies();
+              const cookiesStr = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
+              if (!cookiesStr) {
+                console.warn('Warning: No cookies captured from Puppeteer');
+              }
 
-                  # Parse POST response to find download link
-                  soup = BeautifulSoup(post_response.content, 'html.parser')
-                  links = soup.find_all('a')
-                  target_text = "Click here to download the file"
-                  download_url = None
-                  for link in links:
-                      if target_text in str(link):
-                          download_url = str(link).replace('<a class="ok btn-general btn-orange" href="', '').replace('" style="float:none;margin:auto;font-weight:bold;padding: 10px;margin: 10px;font-size:+1.6em;border:2px solid red">Click here to download the file</a>', '')
-                          break
+              // Define essential headers (no Referer)
+              const headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Connection': 'keep-alive'
+              };
 
-                  if not download_url:
-                      print("Could not find download URL")
-                      return None, None, None, None
+              // Format headers for curl
+              const headersStr = Object.entries(headers).map(([key, value]) => `-H "${key}: ${value}"`).join(' ');
 
-                  # Define essential headers (no Referer)
-                  headers = {
-                      "User-Agent": session.headers["User-Agent"],
-                      "Accept": session.headers["Accept"],
-                      "Accept-Language": session.headers["Accept-Language"],
-                      "Connection": "keep-alive"
-                  }
+              // Output results
+              console.log(`DOWNLOAD_URL=${downloadUrl}`);
+              console.log(`FILENAME=${filename}`);
+              console.log(`COOKIES=${cookiesStr}`);
+              console.log(`HEADERS=${headersStr}`);
 
-                  # Format headers for curl
-                  headers_str = " ".join([f"-H \"{key}: {value}\"" for key, value in headers.items()])
+              return { downloadUrl, filename, cookiesStr, headersStr };
+            } catch (error) {
+              console.error(`Error during extraction: ${error.message}`);
+              process.exit(1);
+            } finally {
+              if (browser) await browser.close();
+            }
+          }
 
-                  return download_url, filename, cookies_str, headers_str
-              except Exception as e:
-                  print(f"Error during extraction: {str(e)}")
-                  return None, None, None, None
-
-          if __name__ == "__main__":
-              if len(sys.argv) != 2:
-                  print("Usage: python extract_1fichier_url.py <url>")
-                  sys.exit(1)
-              url = sys.argv[1]
-              download_url, filename, cookies, headers = extract_1fichier_url(url)
-              if download_url and filename:
-                  print(f"DOWNLOAD_URL={download_url}")
-                  print(f"FILENAME={filename}")
-                  print(f"COOKIES={cookies}")
-                  print(f"HEADERS={headers}")
-              else:
-                  print("Extraction failed")
-                  sys.exit(1)
+          if (require.main === module) {
+            if (process.argv.length !== 3) {
+              console.error('Usage: node extract_1fichier_url.js <url>');
+              process.exit(1);
+            }
+            const url = process.argv[2];
+            extract1fichierUrl(url).catch(error => {
+              console.error(`Extraction failed: ${error.message}`);
+              process.exit(1);
+            });
+          }
           EOF
 
-          # Run the Python script to extract download URL, filename, cookies, and headers
-          python extract_1fichier_url.py "$link" > extract_output.txt 2>&1
+          # Run the Node.js script to extract download URL, filename, cookies, and headers
+          node extract_1fichier_url.js "$link" > extract_output.txt 2>&1
           extract_exit_code=$?
 
           # Extract download URL, filename, cookies, and headers from output
@@ -250,7 +243,7 @@ jobs:
               warning_payload=$(jq -n --arg link "$first_link" '{
                 embeds: [{
                   title: "⚠️ No Cookies Captured",
-                  description: "Link: \($link)\nNo cookies were captured during extraction with Selenium. This may indicate a CAPTCHA or anti-bot measures. Check logs for details.",
+                  description: "Link: \($link)\nNo cookies were captured during extraction with Puppeteer. This may indicate a CAPTCHA or anti-bot measures. Check logs for details.",
                   color: 16776960
                 }]
               }')
@@ -359,4 +352,4 @@ jobs:
           fi
 
           # Clean up
-          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt
+          rm -rf "$temp_dir" extract_1fichier_url.js extract_output.txt
