@@ -25,8 +25,8 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq
-          pip install requests beautifulsoup4
+          sudo apt-get install -y jq chromium-browser chromium-chromedriver
+          pip install requests beautifulsoup4 selenium
 
       - name: Create downloads directory
         run: mkdir -p downloads
@@ -83,7 +83,7 @@ jobs:
               color: 5814783
             }]
           }')
-          curl -s -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
+          curl -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
 
           # Clean the link (remove af= parameter if present)
           link=$(echo "$first_link" | awk -F'&af=' '{print $1}')
@@ -96,17 +96,58 @@ jobs:
             touch downloaded_files.txt
           fi
 
-          # Create Python script to extract download URL, filename, and cookies
+          # Create Python script to extract cookies, download URL, and filename
           cat << 'EOF' > extract_1fichier_url.py
           import requests
           from bs4 import BeautifulSoup
           import sys
-          import re
-          import uuid
-          import base64
-          import os
+          import time
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.chrome.service import Service
 
-          def extract_1fichier_url(url):
+          def get_1fichier_cookies():
+              try:
+                  # Set up Chrome options for headless mode
+                  chrome_options = Options()
+                  chrome_options.add_argument("--headless")
+                  chrome_options.add_argument("--no-sandbox")
+                  chrome_options.add_argument("--disable-dev-shm-usage")
+                  chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
+
+                  # Set up ChromeDriver service
+                  service = Service('/usr/bin/chromedriver')
+                  driver = webdriver.Chrome(service=service, options=chrome_options)
+
+                  # Navigate to 1fichier homepage
+                  driver.get('https://1fichier.com/')
+                  time.sleep(5)  # Wait for cookies to be set
+
+                  # Extract cookies
+                  cookies = driver.get_cookies()
+                  driver.quit()
+
+                  # Find _sharedID and _sharedID_cst
+                  shared_id = None
+                  shared_id_cst = None
+                  for cookie in cookies:
+                      if cookie['name'] == '_sharedID':
+                          shared_id = cookie['value']
+                      elif cookie['name'] == '_sharedID_cst':
+                          shared_id_cst = cookie['value']
+
+                  if not shared_id or not shared_id_cst:
+                      print("Failed to extract _sharedID or _sharedID_cst cookies")
+                      return None, None
+
+                  print(f"SHARED_ID={shared_id}")
+                  print(f"SHARED_ID_CST={shared_id_cst}")
+                  return shared_id, shared_id_cst
+              except Exception as e:
+                  print(f"Error extracting cookies with Selenium: {str(e)}")
+                  return None, None
+
+          def extract_1fichier_url(url, shared_id, shared_id_cst):
               try:
                   # Create a session to persist cookies
                   session = requests.Session()
@@ -116,9 +157,9 @@ jobs:
                       "Accept-Language": "en-US,en;q=0.9",
                       "Connection": "keep-alive",
                       "Referer": "https://1fichier.com/",
-                      "sec-ch-ua": '\"Google Chrome\";v=\"135\", \"Not-A.Brand\";v=\"8\", \"Chromium\";v=\"135\"',
+                      "sec-ch-ua": '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
                       "sec-ch-ua-mobile": "?0",
-                      "sec-ch-ua-platform": '\"Windows\"',
+                      "sec-ch-ua-platform": '"Windows"',
                       "Sec-Fetch-Dest": "document",
                       "Sec-Fetch-Mode": "navigate",
                       "Sec-Fetch-Site": "same-site",
@@ -126,13 +167,20 @@ jobs:
                       "Upgrade-Insecure-Requests": "1"
                   })
 
+                  # Add cookies from Selenium
+                  cookies_dict = {
+                      '_sharedID': shared_id,
+                      '_sharedID_cst': shared_id_cst
+                  }
+                  session.cookies.update(cookies_dict)
+
                   # Initial GET request
                   response = session.get(url, allow_redirects=True)
                   if response.status_code != 200:
                       print(f"Failed to access URL: Status {response.status_code}")
                       with open("debug_get.html", "w", encoding="utf-8") as f:
                           f.write(response.text)
-                      return None, None, None
+                      return None, None, None, None
 
                   # Save GET response HTML for debugging
                   with open("debug_get.html", "w", encoding="utf-8") as f:
@@ -143,52 +191,25 @@ jobs:
                   adz_input = soup.find('input', {'name': 'adz'})
                   if not adz_input:
                       print("Could not find adz input")
-                      return None, None, None
+                      return None, None, None, None
                   adz = adz_input.get('value', '')
 
                   filename_elements = soup.find_all('td', class_='normal')
                   if len(filename_elements) < 2:
                       print("Could not find filename")
-                      return None, None, None
+                      return None, None, None, None
                   filename = filename_elements[1].text.strip()
 
-                  # Try to extract cookies from HTML or response
-                  cookies = {}
-                  html_content = str(soup)
-                  shared_id_match = re.search(r'_sharedID\s*[:=]\s*[\'"]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\'"]', html_content, re.IGNORECASE)
-                  cst_match = re.search(r'_sharedID_cst\s*[:=]\s*[\'"]([A-Za-z0-9+/=]+)[\'"]', html_content, re.IGNORECASE)
-
-                  if shared_id_match:
-                      cookies['_sharedID'] = shared_id_match.group(1)
-                      print(f"Found _sharedID in HTML: {cookies['_sharedID']}")
-                  if cst_match:
-                      cookies['_sharedID_cst'] = cst_match.group(1)
-                      print(f"Found _sharedID_cst in HTML: {cookies['_sharedID_cst']}")
-
-                  # Check response cookies as fallback
-                  if not cookies:
-                      for cookie_name, cookie_value in session.cookies.items():
-                          if cookie_name in ['_sharedID', '_sharedID_cst']:
-                              cookies[cookie_name] = cookie_value
-                              print(f"Found {cookie_name} in response cookies: {cookie_value}")
-                      if cookies:
-                          print("Cookies found in response headers")
-                      else:
-                          print("No cookies found in HTML or response, generating mock cookies")
-                          cookies['_sharedID'] = str(uuid.uuid4())
-                          random_bytes = os.urandom(8)
-                          cookies['_sharedID_cst'] = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
-
-                  cookies_str = "; ".join([f"{key}={value}" for key, value in cookies.items()])
-
                   # POST request to get download page
+                  cookies_dict['show_cm'] = 'no'
+                  session.cookies.update(cookies_dict)
                   data = {"adz": adz, "did": 0, "dlinline": "on"}
                   post_response = session.post(url, data=data, allow_redirects=True)
                   if post_response.status_code != 200:
                       print(f"POST request failed: Status {post_response.status_code}")
                       with open("debug_post.html", "w", encoding="utf-8") as f:
                           f.write(post_response.text)
-                      return None, None, None
+                      return None, None, None, None
 
                   # Save POST response HTML for debugging
                   with open("debug_post.html", "w", encoding="utf-8") as f:
@@ -205,83 +226,77 @@ jobs:
 
                   if not download_url:
                       print("Could not find download URL")
-                      return None, None, None
+                      return None, None, None, None
 
-                  # Define headers for curl
-                  headers = [
-                      "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                      "Accept-Encoding: gzip, deflate, br, zstd",
-                      "Accept-Language: en-US,en;q=0.9",
-                      "Connection: keep-alive",
-                      f"Cookie: {cookies_str}",
-                      "Referer: https://1fichier.com/",
-                      "sec-ch-ua: \"Google Chrome\";v=\"135\", \"Not-A.Brand\";v=\"8\", \"Chromium\";v=\"135\"",
-                      "sec-ch-ua-mobile: ?0",
-                      "sec-ch-ua-platform: \"Windows\"",
-                      "Sec-Fetch-Dest: document",
-                      "Sec-Fetch-Mode: navigate",
-                      "Sec-Fetch-Site: same-site",
-                      "Sec-Fetch-User: ?1",
-                      "Upgrade-Insecure-Requests: 1",
-                      "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
-                  ]
-
-                  headers_str = " ".join([f"-H '{header}'" for header in headers])
-
-                  return download_url, filename, cookies_str, headers_str
+                  return download_url, filename, shared_id, shared_id_cst
               except Exception as e:
                   print(f"Error during extraction: {str(e)}")
-                  return None, None, None
+                  return None, None, None, None
 
           if __name__ == "__main__":
               if len(sys.argv) != 2:
                   print("Usage: python extract_1fichier_url.py <url>")
                   sys.exit(1)
               url = sys.argv[1]
-              download_url, filename, cookies, headers = extract_1fichier_url(url)
-              if download_url and filename and cookies and headers:
+
+              # Get cookies from 1fichier homepage
+              shared_id, shared_id_cst = get_1fichier_cookies()
+              if not shared_id or not shared_id_cst:
+                  print("Failed to get cookies")
+                  sys.exit(1)
+
+              # Extract download URL and filename
+              download_url, filename, shared_id, shared_id_cst = extract_1fichier_url(url, shared_id, shared_id_cst)
+              if download_url and filename and shared_id and shared_id_cst:
                   print(f"DOWNLOAD_URL={download_url}")
                   print(f"FILENAME={filename}")
-                  print(f"COOKIES={cookies}")
-                  print(f"HEADERS={headers}")
+                  print(f"SHARED_ID={shared_id}")
+                  print(f"SHARED_ID_CST={shared_id_cst}")
               else:
                   print("Extraction failed")
                   sys.exit(1)
           EOF
 
-          # Run the Python script to extract download URL, filename, cookies, and headers
+          # Run the Python script to extract download URL, filename, and cookies
           python extract_1fichier_url.py "$link" > extract_output.txt 2>&1
           extract_exit_code=$?
 
-          # Extract download URL, filename, cookies, and headers from output
+          # Extract download URL, filename, and cookies from output
           download_url=$(grep "DOWNLOAD_URL=" extract_output.txt | cut -d'=' -f2-)
           filename=$(grep "FILENAME=" extract_output.txt | cut -d'=' -f2-)
-          cookies=$(grep "COOKIES=" extract_output.txt | cut -d'=' -f2-)
-          headers=$(grep "HEADERS=" extract_output.txt | cut -d'=' -f2-)
+          shared_id=$(grep "SHARED_ID=" extract_output.txt | cut -d'=' -f2-)
+          shared_id_cst=$(grep "SHARED_ID_CST=" extract_output.txt | cut -d'=' -f2-)
 
           # Check if extraction was successful
-          if [ $extract_exit_code -eq 0 ] && [ -n "$download_url" ] && [ -n "$filename" ]; then
-            # Log the download URL, cookies, and headers
+          if [ $extract_exit_code -eq 0 ] && [ -n "$download_url" ] && [ -n "$filename" ] && [ -n "$shared_id" ] && [ -n "$shared_id_cst" ]; then
+            # Create cookie string for curl
+            cookies="_sharedID=$shared_id; _sharedID_cst=$shared_id_cst"
+
+            # Define headers for curl
+            headers="\
+            -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' \
+            -H 'Accept-Encoding: gzip, deflate, br, zstd' \
+            -H 'Accept-Language: en-US,en;q=0.9' \
+            -H 'Connection: keep-alive' \
+            -H 'Cookie: $cookies' \
+            -H 'Referer: https://1fichier.com/' \
+            -H 'sec-ch-ua: \"Google Chrome\";v=\"135\", \"Not-A.Brand\";v=\"8\", \"Chromium\";v=\"135\"' \
+            -H 'sec-ch-ua-mobile: ?0' \
+            -H 'sec-ch-ua-platform: \"Windows\"' \
+            -H 'Sec-Fetch-Dest: document' \
+            -H 'Sec-Fetch-Mode: navigate' \
+            -H 'Sec-Fetch-Site: same-site' \
+            -H 'Sec-Fetch-User: ?1' \
+            -H 'Upgrade-Insecure-Requests: 1' \
+            -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36'"
+
+            # Log the download URL and cookies
             echo "Download URL: $download_url"
             echo "Cookies: $cookies"
-            echo "Headers (raw): $headers"
             echo "Headers (formatted):"
-            echo "$headers" | sed "s/-H '//g; s/'$//g" | tr ' ' '\n' | while IFS= read -r header; do
+            echo "$headers" | tr -s ' ' | tr '\n' '\n' | while IFS= read -r header; do
               [ -n "$header" ] && echo "  $header"
             done
-
-            # Warn if cookies are mocked
-            if grep -q "No cookies found in HTML or response" extract_output.txt; then
-              echo "Warning: Cookies were mocked. Download may fail if real cookies are required."
-              warning_payload=$(jq -n --arg link "$first_link" '{
-                embeds: [{
-                  title: "⚠️ Cookies Mocked",
-                  description: "Link: \($link)\nNo cookies found in HTML or response, using mocked cookies. Check logs for details.",
-                  color: 16776960
-                }]
-              }')
-              curl -s -X POST -H "Content-Type: application/json" -d "$warning_payload" "$DISCORD_WEBHOOK_URL"
-            fi
 
             # Download the file using curl, showing progress
             echo "Starting download..."
@@ -317,7 +332,7 @@ jobs:
                       color: 5814783
                     }]
                   }')
-                curl -s -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
+                curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
                 # Remove first line from fichier_download_list.txt
                 tail -n +2 fichier_download_list.txt > temp.txt
                 mv temp.txt fichier_download_list.txt
@@ -339,7 +354,7 @@ jobs:
                     color: 16711680
                   }]
                 }')
-                curl -s -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+                curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
                 # Keep the link and commit
                 git config user.name "GitHub Actions"
                 git config user.email "actions@github.com"
@@ -363,7 +378,7 @@ jobs:
                   color: 16711680
                 }]
               }')
-              curl -s -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+              curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
               # Keep the link and commit
               git config user.name "GitHub Actions"
               git config user.email "actions@github.com"
@@ -372,7 +387,7 @@ jobs:
               git push
             fi
           else
-            echo "Failed to extract download URL or filename."
+            echo "Failed to extract download URL, filename, or cookies."
             cat extract_output.txt
             if [ -f debug_get.html ]; then
               echo "GET response HTML saved to debug_get.html"
@@ -387,7 +402,7 @@ jobs:
                 color: 16711680
               }]
             }')
-            curl -s -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
             # Keep the link and commit
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
