@@ -83,12 +83,11 @@ def trigger_1fichier_download(url, download_dir):
         print(f"Using temporary user data directory: {user_data_dir}")
 
         chrome_options = Options()
-        chrome_options.page_load_strategy = 'normal'
+        chrome_options.page_load_strategy = 'eager'
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-popup-blocking")
         chrome_options.add_argument("--disable-notifications")
-        chrome_options.add_argument("--headless=new")  # Non-headless untuk menghindari deteksi bot
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         chrome_options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
@@ -107,15 +106,6 @@ def trigger_1fichier_download(url, download_dir):
             driver = webdriver.Chrome(service=service, options=chrome_options)
             logger.info("Initialized ChromeDriver")
             print("Initialized ChromeDriver")
-            # Verifikasi direktori unduhan
-            prefs = driver.execute_script("return window.chrome.prefs")
-            actual_download_dir = prefs.get('download', {}).get('default_directory', 'Unknown')
-            print(f"Download directory set to: {actual_download_dir}")
-            logger.info(f"Download directory set to: {actual_download_dir}")
-            if actual_download_dir != download_dir:
-                print(f"Warning: Download directory mismatch! Expected {download_dir}, got {actual_download_dir}")
-                logger.warning(f"Download directory mismatch: Expected {download_dir}, got {actual_download_dir}")
-            # Ambil screenshot awal
             try:
                 driver.save_screenshot("initial_screenshot.png")
                 print("Saved initial screenshot to initial_screenshot.png")
