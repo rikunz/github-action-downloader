@@ -77,7 +77,10 @@ jobs:
           }')
           curl -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
 
-          link=$(echo "$first_link" | awk -F'&af=' '{print $1}')
+          # Clean link to remove control characters
+          link=$(echo "$first_link" | awk -F'&af=' '{print $1}' | tr -d '\r\n')
+          echo "Cleaned link: $link"
+
           temp_dir=$(mktemp -d)
           touch downloaded_files.txt
 
