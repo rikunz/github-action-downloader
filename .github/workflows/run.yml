@@ -1,3 +1,4 @@
+```yaml
 name: 1fichier Download and Upload to Gofile with Notifications
 
 on:
@@ -261,30 +262,14 @@ jobs:
 
           # Check if extraction was successful
           if [ $extract_exit_code -eq 0 ] && [ -n "$download_url" ] && [ -n "$filename" ]; then
-            # Extract hostname from download_url for Host header
-            host=$(echo "$download_url" | awk -F/ '{print $3}')
-            if [ -z "$host" ]; then
-              echo "Failed to extract hostname from download_url"
-              error_payload=$(jq -n --arg link "$first_link" '{
-                embeds: [{
-                  title: "❌ Failed to Extract Hostname",
-                  description: "Link: \($link)\nCould not extract hostname from download URL.",
-                  color: 16711680
-                }]
-              }')
-              curl -s -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-              exit 1
-            fi
-
             # Log the download URL, cookies, and headers
             echo "Download URL: $download_url"
             echo "Cookies: $cookies"
-            echo "Headers (raw): $headers -H \"Host: $host\""
+            echo "Headers (raw): $headers"
             echo "Headers (formatted):"
             echo "$headers" | sed "s/-H '//g; s/'$//g" | tr ' ' '\n' | while IFS= read -r header; do
               [ -n "$header" ] && echo "  $header"
             done
-            echo "  Host: $host"
 
             # Warn if cookies are mocked
             if grep -q "No cookies found in HTML or response" extract_output.txt; then
@@ -301,8 +286,8 @@ jobs:
 
             # Download the file using curl, showing progress
             echo "Starting download..."
-            echo "curl -C - --retry 10 --retry-delay 10 $headers -H \"Host: $host\" \"$download_url\" --output \"$temp_dir/$filename\""
-            curl -C - --retry 10 --retry-delay 10 $headers -H "Host: $host" "$download_url" --output "$temp_dir/$filename"
+            echo "curl -C - --retry 10 --retry-delay 10 $headers \"$download_url\" --output \"$temp_dir/$filename\""
+            curl -C - --retry 10 --retry-delay 10 $headers "$download_url" --output "$temp_dir/$filename"
             download_exit_code=$?
 
             # Check if download was successful
@@ -414,3 +399,4 @@ jobs:
 
           # Clean up
           rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt debug_get.html debug_post.html
+```
