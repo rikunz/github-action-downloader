@@ -116,9 +116,9 @@ jobs:
                       "Accept-Language": "en-US,en;q=0.9",
                       "Connection": "keep-alive",
                       "Referer": "https://1fichier.com/",
-                      "sec-ch-ua": '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+                      "sec-ch-ua": '\"Google Chrome\";v=\"135\", \"Not-A.Brand\";v=\"8\", \"Chromium\";v=\"135\"',
                       "sec-ch-ua-mobile": "?0",
-                      "sec-ch-ua-platform": '"Windows"',
+                      "sec-ch-ua-platform": '\"Windows\"',
                       "Sec-Fetch-Dest": "document",
                       "Sec-Fetch-Mode": "navigate",
                       "Sec-Fetch-Site": "same-site",
@@ -132,7 +132,7 @@ jobs:
                       print(f"Failed to access URL: Status {response.status_code}")
                       with open("debug_get.html", "w", encoding="utf-8") as f:
                           f.write(response.text)
-                      return None, None, None, None
+                      return None, None, None
 
                   # Save GET response HTML for debugging
                   with open("debug_get.html", "w", encoding="utf-8") as f:
@@ -143,13 +143,13 @@ jobs:
                   adz_input = soup.find('input', {'name': 'adz'})
                   if not adz_input:
                       print("Could not find adz input")
-                      return None, None, None, None
+                      return None, None, None
                   adz = adz_input.get('value', '')
 
                   filename_elements = soup.find_all('td', class_='normal')
                   if len(filename_elements) < 2:
                       print("Could not find filename")
-                      return None, None, None, None
+                      return None, None, None
                   filename = filename_elements[1].text.strip()
 
                   # Try to extract cookies from HTML or response
@@ -160,21 +160,24 @@ jobs:
 
                   if shared_id_match:
                       cookies['_sharedID'] = shared_id_match.group(1)
+                      print(f"Found _sharedID in HTML: {cookies['_sharedID']}")
                   if cst_match:
                       cookies['_sharedID_cst'] = cst_match.group(1)
+                      print(f"Found _sharedID_cst in HTML: {cookies['_sharedID_cst']}")
 
                   # Check response cookies as fallback
                   if not cookies:
                       for cookie_name, cookie_value in session.cookies.items():
                           if cookie_name in ['_sharedID', '_sharedID_cst']:
                               cookies[cookie_name] = cookie_value
-
-                  # If cookies not found, mock them
-                  if not cookies:
-                      print("No cookies found in HTML or response, generating mock cookies")
-                      cookies['_sharedID'] = str(uuid.uuid4())
-                      random_bytes = os.urandom(8)
-                      cookies['_sharedID_cst'] = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
+                              print(f"Found {cookie_name} in response cookies: {cookie_value}")
+                      if cookies:
+                          print("Cookies found in response headers")
+                      else:
+                          print("No cookies found in HTML or response, generating mock cookies")
+                          cookies['_sharedID'] = str(uuid.uuid4())
+                          random_bytes = os.urandom(8)
+                          cookies['_sharedID_cst'] = base64.b64encode(random_bytes).decode('utf-8').rstrip('=')
 
                   cookies_str = "; ".join([f"{key}={value}" for key, value in cookies.items()])
 
@@ -185,7 +188,7 @@ jobs:
                       print(f"POST request failed: Status {post_response.status_code}")
                       with open("debug_post.html", "w", encoding="utf-8") as f:
                           f.write(post_response.text)
-                      return None, None, None, None
+                      return None, None, None
 
                   # Save POST response HTML for debugging
                   with open("debug_post.html", "w", encoding="utf-8") as f:
@@ -202,7 +205,7 @@ jobs:
 
                   if not download_url:
                       print("Could not find download URL")
-                      return None, None, None, None
+                      return None, None, None
 
                   # Define headers for curl
                   headers = [
@@ -212,9 +215,9 @@ jobs:
                       "Connection: keep-alive",
                       f"Cookie: {cookies_str}",
                       "Referer: https://1fichier.com/",
-                      'sec-ch-ua: "Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+                      "sec-ch-ua: \"Google Chrome\";v=\"135\", \"Not-A.Brand\";v=\"8\", \"Chromium\";v=\"135\"",
                       "sec-ch-ua-mobile: ?0",
-                      'sec-ch-ua-platform: "Windows"',
+                      "sec-ch-ua-platform: \"Windows\"",
                       "Sec-Fetch-Dest: document",
                       "Sec-Fetch-Mode: navigate",
                       "Sec-Fetch-Site: same-site",
@@ -223,12 +226,12 @@ jobs:
                       "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
                   ]
 
-                  headers_str = " ".join([f"-H \"{header}\"" for header in headers])
+                  headers_str = " ".join([f"-H '{header}'" for header in headers])
 
                   return download_url, filename, cookies_str, headers_str
               except Exception as e:
                   print(f"Error during extraction: {str(e)}")
-                  return None, None, None, None
+                  return None, None, None
 
           if __name__ == "__main__":
               if len(sys.argv) != 2:
@@ -278,13 +281,9 @@ jobs:
             echo "Cookies: $cookies"
             echo "Headers (raw): $headers -H \"Host: $host\""
             echo "Headers (formatted):"
-            if [ -n "$headers" ]; then
-              echo "$headers" | grep -o -E '-H "[^"]+"' | sed 's/-H "//; s/"$//' | while IFS= read -r header; do
-                echo "  $header"
-              done
-            else
-              echo "  None"
-            fi
+            echo "$headers" | sed "s/-H '//g; s/'$//g" | tr ' ' '\n' | while IFS= read -r header; do
+              [ -n "$header" ] && echo "  $header"
+            done
             echo "  Host: $host"
 
             # Warn if cookies are mocked
@@ -300,13 +299,13 @@ jobs:
               curl -s -X POST -H "Content-Type: application/json" -d "$warning_payload" "$DISCORD_WEBHOOK_URL"
             fi
 
-            # Download the file using curl with headers and Host, completely silent
+            # Download the file using curl, capturing stderr
             echo "Starting download..."
-            curl -s -S -C - --retry 10 --retry-delay 10 $headers -H "Host: $host" "$download_url" --output "$temp_dir/$filename" > /dev/null
+            curl -s -S -C - --retry 10 --retry-delay 10 $headers -H "Host: $host" "$download_url" --output "$temp_dir/$filename" > /dev/null 2> curl_error.txt
             download_exit_code=$?
 
             # Check if download was successful
-            if [ $download_exit_code -eq 0 ] && [ -f "$temp_dir/$filename" ]; then
+            if [ $download_exit_code -eq 0 ] && [ -f "$temp_dir/$filename" ] && [ -s "$temp_dir/$filename" ]; then
               # Upload to Gofile
               gofile_response=$(curl -s -F "file=@$temp_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
               if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
@@ -366,6 +365,10 @@ jobs:
             else
               echo "Download failed."
               cat extract_output.txt
+              if [ -f curl_error.txt ] && [ -s curl_error.txt ]; then
+                echo "Curl errors:"
+                cat curl_error.txt
+              fi
               if [ -f debug_get.html ]; then
                 echo "GET response HTML saved to debug_get.html"
               fi
@@ -375,7 +378,7 @@ jobs:
               error_payload=$(jq -n --arg link "$first_link" '{
                 embeds: [{
                   title: "❌ Failed to Download from 1fichier",
-                  description: "Link: \($link)\nCheck logs and debug HTML files for details.",
+                  description: "Link: \($link)\nCheck logs, curl errors, and debug HTML files for details.",
                   color: 16711680
                 }]
               }')
@@ -413,4 +416,4 @@ jobs:
           fi
 
           # Clean up
-          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt debug_get.html debug_post.html
+          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt debug_get.html debug_post.html curl_error.txt
