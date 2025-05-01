@@ -25,18 +25,8 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq tor
+          sudo apt-get install -y jq
           pip install requests beautifulsoup4
-
-      - name: Start Tor service
-        run: |
-          sudo systemctl start tor
-          sleep 5  # Wait for Tor to initialize
-          if ! pgrep -x "tor" > /dev/null; then
-            echo "Tor service failed to start"
-            exit 1
-          fi
-          echo "Tor service started successfully"
 
       - name: Create downloads directory
         run: mkdir -p downloads
@@ -127,7 +117,33 @@ jobs:
                   if len(filename_elements) < 2:
                       print("Could not find filename")
                       return None, None
-                  filename = str(filename_elements[1]).replace('<td class="normal">', '').replace('</td>',          EOF
+                  filename = str(filename_elements[1]).replace('<td class="normal">', '').replace('</td>', '')
+
+                  # POST request to get download page
+                  data = {"adz": adz, "did": 0, "dlinline": "on"}
+                  post_response = requests.post(url, data=data)
+                  if post_response.status_code != 200:
+                      print(f"POST request failed: Status {post_response.status_code}")
+                      return None, None
+
+                  # Parse POST response to find download link
+                  soup = BeautifulSoup(post_response.content, 'html.parser')
+                  links = soup.find_all('a')
+                  target_text = "Click here to download the file"
+                  download_url = None
+                  for link in links:
+                      if target_text in str(link):
+                          download_url = str(link).replace('<a class="ok btn-general btn-orange" href="', '').replace('" style="float:none;margin:auto;font-weight:bold;padding: 10px;margin: 10px;font-size:+1.6em;border:2px solid red">Click here to download the file</a>', '')
+                          break
+
+                  if not download_url:
+                      print("Could not find download URL")
+                      return None, None
+
+                  return download_url, filename
+              except Exception as e:
+                  print(f"Error during extraction: {str(e)}")
+                  return None, None
 
           if __name__ == "__main__":
               if len(sys.argv) != 2:
@@ -153,120 +169,56 @@ jobs:
 
           # Check if extraction was successful
           if [ $extract_exit_code -eq 0 ] && [ -n "$download_url" ] && [ -n "$filename" ]; then
-            # Get file size using HEAD request through Tor
-            file_size=$(curl --socks5-hostname 127.0.0.1:9050 -I "$download_url" 2>/dev/null | grep -i Content-Length | awk '{print $2}' | tr -d '\r')
-            if [ -z "$file_size" ] || [ "$file_size" -le 0 ]; then
-              echo "Failed to get file size"
-              error_payload=$(jq -n --arg link "$first_link" '{
-                embeds: [{
-                  title: "❌ Failed to Get File Size",
-                  description: "Link: \($link)\nCould not retrieve file size",
-                  color: 16711680
-                }]
-              }')
-              curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-              git config user.name "GitHub Actions"
-              git config user.email "actions@github.com"
-              git add fichier_download_list.txt
-              git commit -m "Failed to process first link: $first_link"
-              git push
-              rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt
-              exit 1
-            fi
+            # Download the file using curl
+            curl -C - --retry 10 --retry-delay 10 "$download_url" --output "$temp_dir/$filename"
+            download_exit_code=$?
 
-            # Calculate chunk sizes (5 chunks)
-            chunk_size=$((file_size / 5))
-            remainder=$((file_size % 5))
-            if [ $remainder -ne 0 ]; then
-              chunk_size=$((chunk_size + 1))
-            fi
-
-            # Download chunks concurrently
-            pids=()
-            for i in {0..4}; do
-              start=$((i * chunk_size))
-              end=$((start + chunk_size - 1))
-              if [ $i -eq 4 ]; then
-                end=$((file_size - 1))  # Ensure last chunk includes remainder
-              fi
-              curl --socks5-hostname 127.0.0.1:9050 -C - --retry 10 --retry-delay 10 -r "$start-$end" "$download_url" --output "$temp_dir/chunk_$i" &
-              pids+=($!)
-            done
-
-            # Wait for all downloads to complete and check exit codes
-            download_failed=false
-            for pid in "${pids[@]}"; do
-              wait $pid
-              if [ $? -ne 0 ]; then
-                download_failed=true
-              fi
-            done
-
-            # Check if all chunks were downloaded
-            if [ "$download_failed" = false ] && [ -f "$temp_dir/chunk_0" ] && [ -f "$temp_dir/chunk_1" ] && [ -f "$temp_dir/chunk_2" ] && [ -f "$temp_dir/chunk_3" ] && [ -f "$temp_dir/chunk_4" ]; then
-              # Reassemble chunks
-              cat "$temp_dir/chunk_0" "$temp_dir/chunk_1" "$temp_dir/chunk_2" "$temp_dir/chunk_3" "$temp_dir/chunk_4" > "$temp_dir/$filename"
-              if [ $? -eq 0 ] && [ -f "$temp_dir/$filename" ]; then
-                # Upload to Gofile
-                gofile_response=$(curl -s -F "file=@$temp_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
-                if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
-                  gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
-                  # Send success notification
-                  upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-                  upload_payload=$(jq -n \
-                    --arg url "$gofile_url" \
-                    --arg link "$first_link" \
-                    --arg time "$upload_time" '{
-                      embeds: [{
-                        title: "📤 File Uploaded to Gofile!",
-                        fields: [
-                          { name: "Download Link", value: "[Download from Gofile](\($url))", inline: true },
-                          { name: "Source 1fichier Link", value: "\($link)", inline: true },
-                          { name: "Uploaded At", value: $time, inline: true }
-                        ],
-                        color: 5814783
-                      }]
-                    }')
-                  curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
-                  # Remove first line from fichier_download_list.txt
-                  tail -n +2 fichier_download_list.txt > temp.txt
-                  mv temp.txt fichier_download_list.txt
-                  git config user.name "GitHub Actions"
-                  git config user.email "actions@github.com"
-                  git add fichier_download_list.txt
-                  if [ -s fichier_download_list.txt ]; then
-                    git commit -m "Processed first link, removed from fichier_download_list.txt"
-                  else
-                    git commit -m "Processed last link, fichier_download_list.txt is now empty"
-                  fi
-                  git push
-                else
-                  echo "Failed to upload to Gofile."
-                  error_payload=$(jq -n --arg link "$first_link" '{
+            # Check if download was successful
+            if [ $download_exit_code -eq 0 ] && [ -f "$temp_dir/$filename" ]; then
+              # Upload to Gofile
+              gofile_response=$(curl -s -F "file=@$temp_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
+              if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
+                gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
+                # Send success notification
+                upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+                upload_payload=$(jq -n \
+                  --arg url "$gofile_url" \
+                  --arg link "$first_link" \
+                  --arg time "$upload_time" '{
                     embeds: [{
-                      title: "❌ Failed to Upload to Gofile",
-                      description: "Link: \($link)",
-                      color: 16711680
+                      title: "📤 File Uploaded to Gofile!",
+                      fields: [
+                        { name: "Download Link", value: "[Download from Gofile](\($url))", inline: true },
+                        { name: "Source 1fichier Link", value: "\($link)", inline: true },
+                        { name: "Uploaded At", value: $time, inline: true }
+                      ],
+                      color: 5814783
                     }]
                   }')
-                  curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
-                  # Keep the link and commit
-                  git config user.name "GitHub Actions"
-                  git config user.email "actions@github.com"
-                  git add fichier_download_list.txt
-                  git commit -m "Failed to process first link: $first_link"
-                  git push
+                curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
+                # Remove first line from fichier_download_list.txt
+                tail -n +2 fichier_download_list.txt > temp.txt
+                mv temp.txt fichier_download_list.txt
+                git config user.name "GitHub Actions"
+                git config user.email "actions@github.com"
+                git add fichier_download_list.txt
+                if [ -s fichier_download_list.txt ]; then
+                  git commit -m "Processed first link, removed from fichier_download_list.txt"
+                else
+                  git commit -m "Processed last link, fichier_download_list.txt is now empty"
                 fi
+                git push
               else
-                echo "Failed to reassemble chunks."
+                echo "Failed to upload to Gofile."
                 error_payload=$(jq -n --arg link "$first_link" '{
                   embeds: [{
-                    title: "❌ Failed to Reassemble File",
-                    description: "Link: \($link)\nChunk reassembly failed",
+                    title: "❌ Failed to Upload to Gofile",
+                    description: "Link: \($link)",
                     color: 16711680
                   }]
                 }')
                 curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+                # Keep the link and commit
                 git config user.name "GitHub Actions"
                 git config user.email "actions@github.com"
                 git add fichier_download_list.txt
@@ -274,7 +226,7 @@ jobs:
                 git push
               fi
             else
-              echo "Download failed: One or more chunks missing or download failed."
+              echo "Download failed."
               cat extract_output.txt
               error_payload=$(jq -n --arg link "$first_link" '{
                 embeds: [{
@@ -284,6 +236,7 @@ jobs:
                 }]
               }')
               curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+              # Keep the link and commit
               git config user.name "GitHub Actions"
               git config user.email "actions@github.com"
               git add fichier_download_list.txt
@@ -301,6 +254,7 @@ jobs:
               }]
             }')
             curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+            # Keep the link and commit
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt
