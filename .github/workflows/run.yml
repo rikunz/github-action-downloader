@@ -69,8 +69,6 @@ jobs:
           temp_dir=$(mktemp -d)
 
           echo "Starting download with Selenium..."
-          echo "Link: $link"
-          echo "Temp directory: $temp_dir"
           python scripts/selenium_download.py "$link" "$temp_dir" > selenium_output.txt 2>&1
           selenium_exit_code=$?
           echo "Selenium output:"
@@ -93,6 +91,13 @@ jobs:
             git push
             exit 1
           fi
+
+          echo "Waiting for download to initiate..."
+          sleep 60
+          echo "Disk space:"
+          df -h
+          echo "Running Chrome processes:"
+          ps aux | grep -E 'chromedriver|chromium' || true
 
           echo "Monitoring download progress..."
           download_complete=false
@@ -181,13 +186,15 @@ jobs:
             echo "Download failed or timed out."
             cat selenium_output.txt
             if [ -f debug_page.html ]; then echo "Saved debug_page.html"; fi
+            if [ -f final_page.html ]; then echo "Saved final_page.html"; fi
+            if [ -f final_screenshot.png ]; then echo "Saved final_screenshot.png"; fi
             if [ -f selenium_download.log ]; then echo "Saved selenium_download.log"; fi
             if [ -f chromedriver.log ]; then echo "Saved chromedriver.log"; fi
             if [ -f chrome_processes.log ]; then echo "Saved chrome_processes.log"; fi
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
                 title: "❌ Failed to Download from 1fichier",
-                description: "Link: \($link)\nCheck logs for details",
+                description: "Link: \($link)\nCheck logs, final_page.html, and final_screenshot.png for details",
                 color: 16711680
               }]
             }')
@@ -209,6 +216,8 @@ jobs:
           name: debug-files
           path: |
             debug_page.html
+            final_page.html
+            final_screenshot.png
             selenium_download.log
             chromedriver.log
             chrome_processes.log

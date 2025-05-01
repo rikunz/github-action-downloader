@@ -51,7 +51,7 @@ def trigger_1fichier_download(url, download_dir):
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-popup-blocking")
         chrome_options.add_argument("--disable-notifications")
-        chrome_options.add_argument("--headless=new")
+        # chrome_options.add_argument("--headless=new")  # Dihapus untuk menghindari deteksi bot
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         chrome_options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
@@ -171,12 +171,32 @@ def trigger_1fichier_download(url, download_dir):
                 return False
 
             print("Waiting for download to initiate...")
-            time.sleep(30)
+            time.sleep(60)
             browser_logs = driver.get_log('browser')
             print("Browser logs:")
             for entry in browser_logs:
                 print(f"[{entry['level']}] {entry['message']}")
                 logger.info(f"Browser log: [{entry['level']}] {entry['message']}")
+            # Periksa isi download_dir
+            print(f"Contents of download directory {download_dir}:")
+            dir_contents = os.listdir(download_dir) if os.path.exists(download_dir) else []
+            print(dir_contents if dir_contents else "Empty")
+            logger.info(f"Download directory contents: {dir_contents if dir_contents else 'Empty'}")
+            # Periksa proses Chrome
+            print("Running Chrome processes:")
+            os.system("ps aux | grep -E 'chromedriver|chromium' || true")
+            # Simpan halaman terakhir untuk debugging
+            with open("final_page.html", "w", encoding="utf-8") as f:
+                f.write(driver.page_source)
+            print("Saved final page source to final_page.html for inspection")
+            # Ambil screenshot
+            try:
+                driver.save_screenshot("final_screenshot.png")
+                print("Saved screenshot to final_screenshot.png")
+                logger.info("Saved screenshot to final_screenshot.png")
+            except Exception as e:
+                print(f"Failed to save screenshot: {str(e)}")
+                logger.error(f"Failed to save screenshot: {str(e)}")
 
             return True
 
@@ -191,6 +211,9 @@ def trigger_1fichier_download(url, download_dir):
                 print("Saved page source to debug_page.html for inspection")
             return False
 
+        finally:
+            pass  # Tidak membersihkan proses agar unduhan berlanjut
+
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         logger.error(f"Unexpected error: {str(e)}")
@@ -203,7 +226,7 @@ if __name__ == "__main__":
 
     url = sys.argv[1]
     download_dir = sys.argv[2]
-    success = trigger_1fichier_url(url, download_dir)
+    success = trigger_1fichier_download(url, download_dir)
     if success:
         print("Download triggered successfully!")
     else:
