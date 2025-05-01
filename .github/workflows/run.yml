@@ -91,14 +91,13 @@ jobs:
           # Temporary directory
           temp_dir=$(mktemp -d)
 
-          # Create Python script for downloading
-          cat << 'EOF' > download_1fichier.py
+          # Create Python script to extract download URL and filename
+          cat << 'EOF' > extract_1fichier_url.py
           import requests
           from bs4 import BeautifulSoup
           import sys
-          import os
 
-          def download_1fichier(url, output_dir):
+          def extract_1fichier_url(url):
               try:
                   # Initial GET request
                   response = requests.get(url)
@@ -120,7 +119,7 @@ jobs:
                       return None, None
                   filename = str(filename_elements[1]).replace('<td class="normal">', '').replace('</td>', '')
 
-                  # POST request to get download link
+                  # POST request to get download page
                   data = {"adz": adz, "did": 0, "dlinline": "on"}
                   post_response = requests.post(url, data=data)
                   if post_response.status_code != 200:
@@ -141,83 +140,98 @@ jobs:
                       print("Could not find download URL")
                       return None, None
 
-                  # Download the file
-                  output_path = os.path.join(output_dir, filename)
-                  with requests.get(download_url, stream=True) as r:
-                      if r.status_code != 200:
-                          print(f"Download failed: Status {r.status_code}")
-                          return None, None
-                      with open(output_path, 'wb') as f:
-                          for chunk in r.iter_content(chunk_size=8192):
-                              if chunk:
-                                  f.write(chunk)
-                  return output_path, filename
+                  return download_url, filename
               except Exception as e:
-                  print(f"Error during download: {str(e)}")
+                  print(f"Error during extraction: {str(e)}")
                   return None, None
 
           if __name__ == "__main__":
-              if len(sys.argv) != 3:
-                  print("Usage: python download_1fichier.py <url> <output_dir>")
+              if len(sys.argv) != 2:
+                  print("Usage: python extract_1fichier_url.py <url>")
                   sys.exit(1)
               url = sys.argv[1]
-              output_dir = sys.argv[2]
-              output_path, filename = download_1fichier(url, output_dir)
-              if output_path:
-                  print(f"Downloaded: {output_path}")
+              download_url, filename = extract_1fichier_url(url)
+              if download_url and filename:
+                  print(f"DOWNLOAD_URL={download_url}")
+                  print(f"FILENAME={filename}")
               else:
-                  print("Download failed")
+                  print("Extraction failed")
                   sys.exit(1)
           EOF
 
-          # Run the Python script to download the file
-          python download_1fichier.py "$link" "$temp_dir" > download_output.txt 2>&1
-          download_exit_code=$?
+          # Run the Python script to extract download URL and filename
+          python extract_1fichier_url.py "$link" > extract_output.txt 2>&1
+          extract_exit_code=$?
 
-          # Extract filename from output
-          filename=$(grep "Downloaded:" download_output.txt | awk -F'Downloaded: ' '{print $2}' | xargs -n 1 basename)
+          # Extract download URL and filename from output
+          download_url=$(grep "DOWNLOAD_URL=" extract_output.txt | cut -d'=' -f2-)
+          filename=$(grep "FILENAME=" extract_output.txt | cut -d'=' -f2-)
 
-          # Check if download was successful
-          if [ $download_exit_code -eq 0 ] && [ -n "$filename" ] && [ -f "$temp_dir/$filename" ]; then
-            # Upload to Gofile
-            gofile_response=$(curl -s -F "file=@$temp_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
-            if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
-              gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
-              # Send success notification
-              upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-              upload_payload=$(jq -n \
-                --arg url "$gofile_url" \
-                --arg link "$first_link" \
-                --arg time "$upload_time" '{
+          # Check if extraction was successful
+          if [ $extract_exit_code -eq 0 ] && [ -n "$download_url" ] && [ -n "$filename" ]; then
+            # Download the file using curl
+            curl -C - --retry 10 --retry-delay 10 "$download_url" --output "$temp_dir/$filename"
+            download_exit_code=$?
+
+            # Check if download was successful
+            if [ $download_exit_code -eq 0 ] && [ -f "$temp_dir/$filename" ]; then
+              # Upload to Gofile
+              gofile_response=$(curl -s -F "file=@$temp_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
+              if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
+                gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
+                # Send success notification
+                upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+                upload_payload=$(jq -n \
+                  --arg url "$gofile_url" \
+                  --arg link "$first_link" \
+                  --arg time "$upload_time" '{
+                    embeds: [{
+                      title: "📤 File Uploaded to Gofile!",
+                      fields: [
+                        { name: "Download Link", value: "[Download from Gofile](\($url))", inline: true },
+                        { name: "Source 1fichier Link", value: "\($link)", inline: true },
+                        { name: "Uploaded At", value: $time, inline: true }
+                      ],
+                      color: 5814783
+                    }]
+                  }')
+                curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
+                # Remove first line from fichier_download_list.txt
+                tail -n +2 fichier_download_list.txt > temp.txt
+                mv temp.txt fichier_download_list.txt
+                git config user.name "GitHub Actions"
+                git config user.email "actions@github.com"
+                git add fichier_download_list.txt
+                if [ -s fichier_download_list.txt ]; then
+                  git commit -m "Processed first link, removed from fichier_download_list.txt"
+                else
+                  git commit -m "Processed last link, fichier_download_list.txt is now empty"
+                fi
+                git push
+              else
+                echo "Failed to upload to Gofile."
+                error_payload=$(jq -n --arg link "$first_link" '{
                   embeds: [{
-                    title: "📤 File Uploaded to Gofile!",
-                    fields: [
-                      { name: "Download Link", value: "[Download from Gofile](\($url))", inline: true },
-                      { name: "Source 1fichier Link", value: "\($link)", inline: true },
-                      { name: "Uploaded At", value: $time, inline: true }
-                    ],
-                    color: 5814783
+                    title: "❌ Failed to Upload to Gofile",
+                    description: "Link: \($link)",
+                    color: 16711680
                   }]
                 }')
-              curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
-              # Remove first line from fichier_download_list.txt
-              tail -n +2 fichier_download_list.txt > temp.txt
-              mv temp.txt fichier_download_list.txt
-              git config user.name "GitHub Actions"
-              git config user.email "actions@github.com"
-              git add fichier_download_list.txt
-              if [ -s fichier_download_list.txt ]; then
-                git commit -m "Processed first link, removed from fichier_download_list.txt"
-              else
-                git commit -m "Processed last link, fichier_download_list.txt is now empty"
+                curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+                # Keep the link and commit
+                git config user.name "GitHub Actions"
+                git config user.email "actions@github.com"
+                git add fichier_download_list.txt
+                git commit -m "Failed to process first link: $first_link"
+                git push
               fi
-              git push
             else
-              echo "Failed to upload to Gofile."
+              echo "Download failed."
+              cat extract_output.txt
               error_payload=$(jq -n --arg link "$first_link" '{
                 embeds: [{
-                  title: "❌ Failed to Upload to Gofile",
-                  description: "Link: \($link)",
+                  title: "❌ Failed to Download from 1fichier",
+                  description: "Link: \($link)\nCheck logs for details",
                   color: 16711680
                 }]
               }')
@@ -230,11 +244,11 @@ jobs:
               git push
             fi
           else
-            echo "Download failed."
-            cat download_output.txt
+            echo "Failed to extract download URL or filename."
+            cat extract_output.txt
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
-                title: "❌ Failed to Download from 1fichier",
+                title: "❌ Failed to Extract 1fichier Download URL",
                 description: "Link: \($link)\nCheck logs for details",
                 color: 16711680
               }]
@@ -249,4 +263,4 @@ jobs:
           fi
 
           # Clean up
-          rm -rf "$temp_dir" download_1fichier.py download_output.txt
+          rm -rf "$temp_dir" extract_1fichier_url.py extract_output.txt
