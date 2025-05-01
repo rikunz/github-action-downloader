@@ -69,6 +69,8 @@ jobs:
           temp_dir=$(mktemp -d)
 
           echo "Starting download with Selenium..."
+          echo "Link: $link"
+          echo "Temp directory: $temp_dir"
           python scripts/selenium_download.py "$link" "$temp_dir" > selenium_output.txt 2>&1
           selenium_exit_code=$?
           echo "Selenium output:"
