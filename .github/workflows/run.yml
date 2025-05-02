@@ -15,6 +15,7 @@ permissions:
 jobs:
   download-and-upload:
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # Prevent early termination
 
     steps:
       - name: Checkout code
@@ -31,6 +32,30 @@ jobs:
           chromedriver --version
           which chromedriver
           ls -l /usr/bin/chromedriver
+
+      - name: Get Gofile server
+        id: gofile_server
+        run: |
+          response=$(curl -s https://api.gofile.io/servers)
+          echo "Raw Gofile API response: $response"
+
+          preferred_zones='["asia", "eu", "na"]'
+          server="store1"
+
+          if echo "$response" | jq -e '.data.serversAllZone' > /dev/null 2>&1; then
+            for zone in $(echo $preferred_zones | jq -r '.[]'); do
+              candidate=$(echo "$response" | jq -r --arg zone "$zone" '.data.serversAllZone[] | select(.zone == $zone) | .name' | head -n 1)
+              if [ -n "$candidate" ]; then
+                server="$candidate"
+                break
+              fi
+            done
+            echo "Selected server based on preferred zone: $server"
+          else
+            echo "Failed to get valid servers list, using fallback: $server"
+          fi
+
+          echo "server=$server" >> $GITHUB_ENV
 
       - name: Process First 1fichier Link
         env:
@@ -116,7 +141,7 @@ jobs:
           download_complete=false
           timeout=600  # 10-minute timeout
           elapsed=0
-          min_size=0  # Disable minimum size for debugging
+          min_size=102400  # 100KB minimum size to filter out temporary files
 
           while [ $elapsed -lt $timeout ]; do
             echo "Check $((elapsed/30 + 1)): Contents of download_dir:"
@@ -135,15 +160,19 @@ jobs:
                 break
               fi
             # Check for completed files
-            elif find "$download_dir" -type f -not -name "*.crdownload" -not -name "*.tmp" | grep -q .; then
-              filename=$(find "$download_dir" -type f -not -name "*.crdownload" -not -name "*.tmp" | head -n 1)
+            elif find "$download_dir" -type f -not -name "*.crdownload" -not -name "*.tmp" -not -name ".org.chromium.*" | grep -q .; then
+              filename=$(find "$download_dir" -type f -not -name "*.crdownload" -not -name "*.tmp" -not -name ".org.chromium.*" | head -n 1)
               basename=$(basename "$filename")
               
               if [ -n "$filename" ]; then
                 size=$(stat -c %s "$filename")
-                echo "Download complete: $basename, Size: $size bytes"
-                download_complete=true
-                break
+                if [ $size -ge $min_size ]; then
+                  echo "Download complete: $basename, Size: $size bytes"
+                  download_complete=true
+                  break
+                else
+                  echo "File $basename found but too small ($size bytes), waiting..."
+                fi
               else
                 echo "Waiting for download to complete..."
               fi
@@ -162,12 +191,12 @@ jobs:
           cat chrome_processes_final.log
 
           if [ "$download_complete" = true ]; then
-            echo "Upload to Gofile starting..."
-            completed_file=$(find "$download_dir" -type f -not -name "*.crdownload" -not -name "*.tmp" | head -n 1)
+            echo "Starting Gofile upload process..."
+            completed_file=$(find "$download_dir" -type f -not -name "*.crdownload" -not -name "*.tmp" -not -name ".org.chromium.*" | head -n 1)
             completed_basename=$(basename "$completed_file")
             
             echo "Uploading file: $completed_file (size: $(stat -c %s "$completed_file") bytes)"
-            gofile_response=$(curl -s -F "file=@$completed_file" "https://$GOFILE_SERVER.gofile.io/uploadFile")
+            gofile_response=$(curl -s -F "file=@$completed_file" "https://${{ env.server }}.gofile.io/uploadFile")
             echo "Gofile response: $gofile_response"
             
             if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
@@ -219,6 +248,7 @@ jobs:
               git add fichier_download_list.txt
               git commit -m "Failed to process first link: $first_link"
               git push
+              exit 1
             fi
           else
             echo "Download failed or timed out."

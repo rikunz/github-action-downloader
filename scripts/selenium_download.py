@@ -2,7 +2,6 @@ import time
 import sys
 import os
 import logging
-import shutil
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -28,7 +27,7 @@ def monitor_download(download_dir, timeout=600, logger=None):
     while time.time() - start_time < timeout:
         files = os.listdir(download_dir) if os.path.exists(download_dir) else []
         crdownload_files = [f for f in files if f.endswith(".crdownload")]
-        completed_files = [f for f in files if not f.endswith((".crdownload", ".tmp"))]
+        completed_files = [f for f in files if not f.endswith((".crdownload", ".tmp")) and not f.startswith(".org.chromium.")]
         
         if completed_files:
             file_path = os.path.join(download_dir, completed_files[0])
@@ -268,15 +267,7 @@ def trigger_1fichier_download(url):
             return False
 
         finally:
-            # Close browser only after download is complete or timed out
-            if driver:
-                try:
-                    driver.quit()
-                    logger.info("Closed browser")
-                    print("Closed browser")
-                except Exception as e:
-                    logger.error(f"Error closing browser: {str(e)}")
-                    print(f"Error closing browser: {str(e)}")
+            pass
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
