@@ -21,6 +21,34 @@ def setup_logging():
     logger.info("Logging initialized")
     return logger
 
+def monitor_download(download_dir, timeout=600, logger=None):
+    """Monitor download progress by checking for .crdownload or completed files."""
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        files = os.listdir(download_dir) if os.path.exists(download_dir) else []
+        crdownload_files = [f for f in files if f.endswith(".crdownload")]
+        completed_files = [f for f in files if not f.endswith((".crdownload", ".tmp")) and not f.startswith(".org.chromium.")]
+        
+        if completed_files:
+            file_path = os.path.join(download_dir, completed_files[0])
+            size = os.path.getsize(file_path)
+            logger.info(f"Completed file found: {file_path}, size: {size} bytes")
+            print(f"Completed file found: {file_path}, size: {size} bytes")
+            return True
+        elif crdownload_files:
+            file_path = os.path.join(download_dir, crdownload_files[0])
+            size = os.path.getsize(file_path)
+            logger.info(f"Download in progress: {file_path}, size: {size} bytes")
+            print(f"Download in progress: {file_path}, size: {size} bytes")
+        else:
+            logger.info("No download files found yet")
+            print("No download files found yet")
+        
+        time.sleep(10)
+    logger.error("Download timed out")
+    print("Download timed out")
+    return False
+
 def trigger_1fichier_download(url):
     logger = setup_logging()
     logger.info(f"Starting download for URL: {url}")
@@ -191,6 +219,14 @@ def trigger_1fichier_download(url):
                     logger.error(f"Failed to save debug screenshot: {str(e)}")
                 return False
 
+            # Monitor download progress
+            print("Monitoring download progress...")
+            logger.info("Monitoring download progress")
+            if not monitor_download(download_dir, timeout=600, logger=logger):
+                print("Download failed or timed out")
+                logger.error("Download failed or timed out")
+                return False
+
             # Save final state
             with open("final_page.html", "w", encoding="utf-8") as f:
                 f.write(driver.page_source)
@@ -205,8 +241,8 @@ def trigger_1fichier_download(url):
                 logger.error(f"Failed to save final screenshot: {str(e)}")
 
             # Return success
-            print(f"Download triggered successfully. Browser left open.")
-            logger.info(f"Download triggered successfully. Browser left open.")
+            print(f"Download process completed successfully. File should be saved to {download_dir}")
+            logger.info(f"Download process completed successfully. File should be saved to {download_dir}")
             return True
 
         except WebDriverException as e:
@@ -230,12 +266,21 @@ def trigger_1fichier_download(url):
                     logger.error(f"Failed to save debug screenshot: {str(e)}")
             return False
 
-        except Exception as e:
-            print(f"Unexpected error: {str(e)}")
-            logger.error(f"Unexpected error: {str(e)}")
-            return False
-    finally:
-        pass
+        finally:
+            # Close browser only after download is complete or timed out
+            if driver:
+                try:
+                    driver.quit()
+                    logger.info("Closed browser")
+                    print("Closed browser")
+                except Exception as e:
+                    logger.error(f"Error closing browser: {str(e)}")
+                    print(f"Error closing browser: {str(e)}")
+
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        logger.error(f"Unexpected error: {str(e)}")
+        return False
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
