@@ -2,7 +2,7 @@ import time
 import sys
 import os
 import logging
-# Removed unused tempfile import
+import tempfile
 import shutil
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -24,20 +24,17 @@ def setup_logging():
     return logger
 
 def clean_chrome_processes():
-    """Kill any existing Chrome and ChromeDriver processes aggressively."""
+    """Kill any existing Chrome and ChromeDriver processes and clean temp directories."""
     logger = setup_logging()
     try:
-        # Log proses yang berjalan sebelum pembersihan
         logger.info("Checking running Chrome processes before cleanup")
-        os.system("ps aux | grep -E 'chromedriver|chromium' > chrome_processes_before.log")
-        print("Saved running processes to chrome_processes_before.log")
+        os.system("ps aux | grep -E 'chromedriver|chromium' > chrome_processes.log")
+        print("Saved running processes to chrome_processes.log")
 
-        # Hentikan proses chromedriver dan chromium
         os.system("pkill -9 -f chromedriver >/dev/null 2>&1 || true")
         os.system("pkill -9 -f chromium >/dev/null 2>&1 || true")
-        time.sleep(2)  # Beri waktu untuk proses dihentikan
+        time.sleep(2)
 
-        # Hapus direktori data pengguna sementara
         temp_dirs = [d for d in os.listdir('/tmp') if d.startswith('.com.google.Chrome') or d.startswith('chrome-user-data')]
         for temp_dir in temp_dirs:
             try:
@@ -47,11 +44,6 @@ def clean_chrome_processes():
             except Exception as e:
                 logger.warning(f"Failed to remove /tmp/{temp_dir}: {str(e)}")
                 print(f"Warning: Failed to remove /tmp/{temp_dir}: {str(e)}")
-
-        # Log proses setelah pembersihan
-        os.system("ps aux | grep -E 'chromedriver|chromium' > chrome_processes_after.log")
-        logger.info("Logged running Chrome processes to chrome_processes_after.log")
-        print("Saved running processes to chrome_processes_after.log")
     except Exception as e:
         logger.warning(f"Failed to clean Chrome processes: {str(e)}")
         print(f"Warning: Failed to clean Chrome processes: {str(e)}")
@@ -62,7 +54,6 @@ def trigger_1fichier_download(url, download_dir):
     print(f"Starting download for URL: {url}, Download dir: {download_dir}")
 
     try:
-        # Pastikan direktori ada dan memiliki izin menulis
         if not os.path.exists(download_dir):
             os.makedirs(download_dir, mode=0o777)
             logger.info(f"Created download directory: {download_dir}")
@@ -75,14 +66,19 @@ def trigger_1fichier_download(url, download_dir):
         logger.info(f"Set permissions to 777 for {download_dir}")
         print(f"Set permissions to 777 for {download_dir}")
 
-        # clean_chrome_processes()
+        clean_chrome_processes()
+
+        user_data_dir = tempfile.mkdtemp(prefix="chrome-user-data-")
+        logger.info(f"Using temporary user data directory: {user_data_dir}")
+        print(f"Using temporary user data directory: {user_data_dir}")
 
         chrome_options = Options()
-        chrome_options.page_load_strategy = 'eager'
+        chrome_options.page_load_strategy = 'normal'
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-popup-blocking")
         chrome_options.add_argument("--disable-notifications")
+        chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         chrome_options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
@@ -170,6 +166,23 @@ def trigger_1fichier_download(url, download_dir):
                     logger.error(f"Failed to save debug screenshot: {str(e)}")
                 return False
 
+            print("Checking for ad overlays...")
+            try:
+                ad_close_buttons = driver.find_elements(By.CSS_SELECTOR, ".st-placement.inScreen [id*='close'], .st-adunit [id*='close'], [id*='r89-'] [id*='close']")
+                for btn in ad_close_buttons:
+                    if btn.is_displayed() and btn.is_enabled():
+                        try:
+                            driver.execute_script("arguments[0].click();", btn)
+                            print("Closed ad overlay")
+                            logger.info("Closed ad overlay")
+                            time.sleep(1)
+                        except:
+                            print("Failed to close ad overlay, continuing...")
+                            logger.warning("Failed to close ad overlay")
+            except NoSuchElementException:
+                print("No ad close buttons found.")
+                logger.info("No ad close buttons found")
+
             print("Waiting for ok-btn-general link...")
             try:
                 ok_button = WebDriverWait(driver, 30).until(
@@ -211,19 +224,15 @@ def trigger_1fichier_download(url, download_dir):
             for entry in browser_logs:
                 print(f"[{entry['level']}] {entry['message']}")
                 logger.info(f"Browser log: [{entry['level']}] {entry['message']}")
-            # Periksa isi download_dir
             print(f"Contents of download directory {download_dir}:")
             dir_contents = os.listdir(download_dir) if os.path.exists(download_dir) else []
             print(dir_contents if dir_contents else "Empty")
             logger.info(f"Download directory contents: {dir_contents if dir_contents else 'Empty'}")
-            # Periksa proses Chrome
             print("Running Chrome processes:")
             os.system("ps aux | grep -E 'chromedriver|chromium' || true")
-            # Simpan halaman terakhir untuk debugging
             with open("final_page.html", "w", encoding="utf-8") as f:
                 f.write(driver.page_source)
             print("Saved final page source to final_page.html for inspection")
-            # Ambil screenshot akhir
             try:
                 driver.save_screenshot("final_screenshot.png")
                 print("Saved final screenshot to final_screenshot.png")
@@ -253,7 +262,7 @@ def trigger_1fichier_download(url, download_dir):
             return False
 
         finally:
-            pass  # Tidak membersihkan proses agar unduhan berlanjut
+            pass
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
