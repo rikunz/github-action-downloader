@@ -160,8 +160,8 @@ jobs:
           $link = $firstLink -replace '&af=.*$', '' -replace '\r\n', ''
 
           Write-Host "Starting download with Selenium..."
-          python -u scripts\selenium_download.py $link 2>&1 | Tee-Object -FilePath selenium_download.log
-          $seleniumExitCode = $LASTEXITCODE
+                python -u scripts\selenium_download.py $link 2>&1 | ForEach-Object { Write-Host $_; $_ } | Tee-Object -FilePath selenium_download.log
+                $seleniumExitCode = $LASTEXITCODE
 
           if ($seleniumExitCode -ne 0) {
             Write-Host "Failed to trigger download with Selenium."
