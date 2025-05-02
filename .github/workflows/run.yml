@@ -104,13 +104,13 @@ jobs:
 
           echo "Monitoring download progress..."
           download_complete=false
-          timeout=18000
+          timeout=100
           elapsed=0
           min_size=1048576
           
           while [ $elapsed -lt $timeout ]; do
             echo "Contents of download_dir:"
-            ls -lah "$download_dir"
+            ls -l "$download_dir"
             
             # Check for .crdownload files (in-progress)
             if ls "$download_dir"/*.crdownload >/dev/null 2>&1; then
