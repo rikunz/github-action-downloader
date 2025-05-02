@@ -25,13 +25,20 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq chromium-browser chromium-chromedriver
+          sudo apt-get install -y jq chromium-browser
+          # Install ChromeDriver matching Chromium version
+          CHROME_VERSION=$(chromium-browser --version | grep -oP '\d+\.\d+\.\d+')
+          wget -N https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION%%.*}
+          CHROMEDRIVER_VERSION=$(cat LATEST_RELEASE_${CHROME_VERSION%%.*})
+          wget -N https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip
+          unzip chromedriver_linux64.zip
+          sudo mv chromedriver /usr/bin/chromedriver
+          sudo chmod +x /usr/bin/chromedriver
           pip install requests beautifulsoup4 selenium
           chromium-browser --version
           chromedriver --version
           which chromedriver
           ls -l /usr/bin/chromedriver
-          
 
       - name: Process First 1fichier Link
         env:
@@ -51,9 +58,10 @@ jobs:
           echo "Processing $first_link"
 
           # Create download directory with proper permissions
-          download_dir="/tmp/downloads"
+          download_dir="$GITHUB_WORKSPACE/downloads"
           mkdir -p "$download_dir"
           chmod 777 "$download_dir"
+          ls -ld "$download_dir"  # Log directory permissions
           echo "Created download directory with proper permissions"
 
           start_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -72,13 +80,22 @@ jobs:
           link=$(echo "$first_link" | awk -F'&af=' '{print $1}' | tr -d '\r\n')
 
           echo "Starting download with Selenium..."
-          python scripts/selenium_download.py "$link" > selenium_output.txt 2>&1
-          selenium_exit_code=$?
-          echo "Selenium output:"
-          cat selenium_output.txt
+          for attempt in {1..3}; do
+            echo "Download attempt $attempt of 3"
+            python scripts/selenium_download.py "$link" > selenium_output.txt 2>&1
+            selenium_exit_code=$?
+            echo "Selenium output:"
+            cat selenium_output.txt
+
+            if [ $selenium_exit_code -eq 0 ]; then
+              break
+            fi
+            echo "Download attempt $attempt failed, retrying..."
+            sleep 5
+          done
 
           if [ $selenium_exit_code -ne 0 ]; then
-            echo "Failed to trigger download with Selenium."
+            echo "Failed to trigger download with Selenium after 3 attempts."
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
                 title: "❌ Failed to Trigger Download from 1fichier",
@@ -96,20 +113,21 @@ jobs:
           fi
 
           echo "Waiting for download to initiate..."
-          sleep 60
+          sleep 300  # Wait 5 minutes for download to start
           echo "Disk space:"
           df -h
           echo "Running Chrome processes:"
-          ps aux | grep -E 'chromedriver|chromium' || true
+          ps aux | grep -E 'chromedriver|chromium' > chrome_processes_initial.log || true
+          cat chrome_processes_initial.log
 
           echo "Monitoring download progress..."
           download_complete=false
-          timeout=100
+          timeout=600  # 10-minute timeout
           elapsed=0
-          min_size=1048576
-          
+          min_size=0  # Disable minimum size for debugging
+
           while [ $elapsed -lt $timeout ]; do
-            echo "Contents of download_dir:"
+            echo "Check $((elapsed/30 + 1)): Contents of download_dir:"
             ls -l "$download_dir"
             
             # Check for .crdownload files (in-progress)
@@ -117,6 +135,13 @@ jobs:
               file=$(ls "$download_dir"/*.crdownload 2>/dev/null | head -n 1)
               size=$(stat -c %s "$file" 2>/dev/null || echo 0)
               echo "Progress: File $file, Size: $size bytes"
+              # Check if file size is changing
+              sleep 10
+              new_size=$(stat -c %s "$file" 2>/dev/null || echo 0)
+              if [ "$size" = "$new_size" ] && [ $size -ne 0 ]; then
+                echo "Download seems stalled, breaking..."
+                break
+              fi
             # Check for completed files
             elif find "$download_dir" -type f -not -name "*.crdownload" -not -name "*.tmp" | grep -q .; then
               filename=$(find "$download_dir" -type f -not -name "*.crdownload" -not -name "*.tmp" | head -n 1)
@@ -124,13 +149,9 @@ jobs:
               
               if [ -n "$filename" ]; then
                 size=$(stat -c %s "$filename")
-                if [ $size -ge $min_size ]; then
-                  echo "Download complete: $basename, Size: $size bytes"
-                  download_complete=true
-                  break
-                else
-                  echo "File $basename found but too small ($size bytes), waiting..."
-                fi
+                echo "Download complete: $basename, Size: $size bytes"
+                download_complete=true
+                break
               else
                 echo "Waiting for download to complete..."
               fi
@@ -140,6 +161,13 @@ jobs:
             sleep 30
             elapsed=$((elapsed + 30))
           done
+
+          echo "Final contents of download_dir:"
+          ls -l "$download_dir"
+
+          echo "Running Chrome processes after monitoring:"
+          ps aux | grep -E 'chromedriver|chromium' > chrome_processes_final.log || true
+          cat chrome_processes_final.log
 
           if [ "$download_complete" = true ]; then
             echo "Upload to Gofile starting..."
@@ -210,8 +238,8 @@ jobs:
             if [ -f final_screenshot.png ]; then echo "Saved final_screenshot.png"; fi
             if [ -f selenium_download.log ]; then echo "Saved selenium_download.log"; fi
             if [ -f chromedriver.log ]; then echo "Saved chromedriver.log"; fi
-            if [ -f chrome_processes.log ]; then echo "Saved chrome_processes.log"; fi
             if [ -f chrome_processes_initial.log ]; then echo "Saved chrome_processes_initial.log"; fi
+            if [ -f chrome_processes_final.log ]; then echo "Saved chrome_processes_final.log"; fi
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
                 title: "❌ Failed to Download from 1fichier",
@@ -231,7 +259,6 @@ jobs:
           rm -rf selenium_output.txt
 
       - name: Upload debug files
-        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: debug-files
@@ -243,6 +270,7 @@ jobs:
             final_screenshot.png
             selenium_download.log
             chromedriver.log
-            chrome_processes.log
             chrome_processes_initial.log
+            chrome_processes_final.log
+            selenium_output.txt
           if-no-files-found: warn

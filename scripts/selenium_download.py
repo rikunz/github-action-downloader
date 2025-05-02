@@ -22,14 +22,43 @@ def setup_logging():
     logger.info("Logging initialized")
     return logger
 
+def monitor_download(download_dir, timeout=600, logger=None):
+    """Monitor download progress by checking for .crdownload or completed files."""
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        files = os.listdir(download_dir) if os.path.exists(download_dir) else []
+        crdownload_files = [f for f in files if f.endswith(".crdownload")]
+        completed_files = [f for f in files if not f.endswith((".crdownload", ".tmp"))]
+        
+        if completed_files:
+            file_path = os.path.join(download_dir, completed_files[0])
+            size = os.path.getsize(file_path)
+            logger.info(f"Completed file found: {file_path}, size: {size} bytes")
+            print(f"Completed file found: {file_path}, size: {size} bytes")
+            return True
+        elif crdownload_files:
+            file_path = os.path.join(download_dir, crdownload_files[0])
+            size = os.path.getsize(file_path)
+            logger.info(f"Download in progress: {file_path}, size: {size} bytes")
+            print(f"Download in progress: {file_path}, size: {size} bytes")
+        else:
+            logger.info("No download files found yet")
+            print("No download files found yet")
+        
+        time.sleep(10)
+    logger.error("Download timed out")
+    print("Download timed out")
+    return False
+
 def trigger_1fichier_download(url):
     logger = setup_logging()
     logger.info(f"Starting download for URL: {url}")
     print(f"Starting download for URL: {url}")
 
+    driver = None
     try:
         # Create and setup download directory
-        download_dir = "/tmp/downloads"
+        download_dir = os.path.join(os.getenv("GITHUB_WORKSPACE", "/tmp"), "downloads")
         if not os.path.exists(download_dir):
             os.makedirs(download_dir, exist_ok=True)
             logger.info(f"Created download directory: {download_dir}")
@@ -51,8 +80,11 @@ def trigger_1fichier_download(url):
         chrome_options.page_load_strategy = 'eager'
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--headless")  # Run in headless mode for server environments
+        chrome_options.add_argument("--headless")
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option("useAutomationExtension", False)
         chrome_options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
             "download.prompt_for_download": False,
@@ -111,28 +143,23 @@ def trigger_1fichier_download(url):
             # Wait for free download button to appear
             print("Waiting for dlb input to be visible and clickable...")
             try:
-                # First wait for the element to be present in the DOM
                 WebDriverWait(driver, 30).until(
                     EC.presence_of_element_located((By.ID, "dlb"))
                 )
                 
-                # Try to find and click the download button using different methods
                 try:
-                    # Method 1: Direct click
                     dlb_input = driver.find_element(By.ID, "dlb")
                     dlb_input.click()
                     print("Clicked dlb input directly")
                     logger.info("Clicked dlb input directly")
                 except Exception as e:
                     print(f"Direct click failed: {str(e)}. Trying JavaScript click...")
-                    # Method 2: JavaScript click
                     try:
                         driver.execute_script("document.getElementById('dlb').click();")
                         print("Clicked dlb input via JavaScript getElementById")
                         logger.info("Clicked dlb input via JavaScript getElementById")
                     except Exception as e2:
                         print(f"JavaScript getElementById click failed: {str(e2)}. Final attempt...")
-                        # Method 3: Another JavaScript approach
                         try:
                             driver.execute_script("arguments[0].click();", driver.find_element(By.ID, "dlb"))
                             print("Clicked dlb input via JavaScript arguments[0]")
@@ -183,26 +210,24 @@ def trigger_1fichier_download(url):
                 with open("debug_page.html", "w", encoding="utf-8") as f:
                     f.write(driver.page_source)
                 print("Saved page source to debug_page.html for inspection")
+                
+                try:
+                    driver.save_screenshot("debug_screenshot.png")
+                    print("Saved debug screenshot to debug_screenshot.png")
+                    logger.info("Saved debug screenshot to debug_screenshot.png")
+                except Exception as e:
+                    print(f"Failed to save debug screenshot: {str(e)}")
+                    logger.error(f"Failed to save debug screenshot: {str(e)}")
                 return False
 
-            # Wait for download to start
-            print("Waiting for download to initiate...")
-            time.sleep(30)  # Wait a bit for download to start
-            
-            # Keep browser window open to continue the download
-            print(f"Download process initiated successfully. File should be saved to {download_dir}")
-            logger.info(f"Download process initiated successfully. File should be saved to {download_dir}")
-            
-            # Check download directory
-            print(f"Contents of download directory {download_dir}:")
-            dir_contents = os.listdir(download_dir) if os.path.exists(download_dir) else []
-            print(dir_contents if dir_contents else "Empty")
-            logger.info(f"Download directory contents: {dir_contents if dir_contents else 'Empty'}")
-            
-            # Monitor Chrome processes
-            print("Running Chrome processes:")
-            os.system("ps aux | grep -E 'chromedriver|chromium' || true")
-            
+            # Monitor download progress
+            print("Monitoring download progress...")
+            logger.info("Monitoring download progress")
+            if not monitor_download(download_dir, timeout=600, logger=logger):
+                print("Download failed or timed out")
+                logger.error("Download failed or timed out")
+                return False
+
             # Save final state
             with open("final_page.html", "w", encoding="utf-8") as f:
                 f.write(driver.page_source)
@@ -216,14 +241,16 @@ def trigger_1fichier_download(url):
                 print(f"Failed to save final screenshot: {str(e)}")
                 logger.error(f"Failed to save final screenshot: {str(e)}")
 
-            # Return success - leave browser open for downloads to continue
+            # Return success
+            print(f"Download process completed successfully. File should be saved to {download_dir}")
+            logger.info(f"Download process completed successfully. File should be saved to {download_dir}")
             return True
 
         except WebDriverException as e:
             print(f"Error during page navigation or interaction: {str(e)}")
             logger.error(f"WebDriver error: {str(e)}")
             
-            if 'driver' in locals():
+            if driver:
                 print(f"Current page title: {driver.title}")
                 print(f"Current page URL: {driver.current_url}")
                 
@@ -241,8 +268,15 @@ def trigger_1fichier_download(url):
             return False
 
         finally:
-            # Don't close the browser so downloads can continue
-            pass
+            # Close browser only after download is complete or timed out
+            if driver:
+                try:
+                    driver.quit()
+                    logger.info("Closed browser")
+                    print("Closed browser")
+                except Exception as e:
+                    logger.error(f"Error closing browser: {str(e)}")
+                    print(f"Error closing browser: {str(e)}")
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
