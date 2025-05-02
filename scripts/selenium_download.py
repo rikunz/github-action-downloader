@@ -234,6 +234,8 @@ def trigger_1fichier_download(url):
             print(f"Unexpected error: {str(e)}")
             logger.error(f"Unexpected error: {str(e)}")
             return False
+    finally:
+        pass
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
