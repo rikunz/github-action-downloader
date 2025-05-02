@@ -31,19 +31,12 @@ jobs:
           chromedriver --version
           which chromedriver
           ls -l /usr/bin/chromedriver
+          
 
       - name: Process First 1fichier Link
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          echo "Cleaning up existing Chrome processes..."
-          pkill -9 -f chromedriver >/dev/null 2>&1 || true
-          pkill -9 -f chromium >/dev/null 2>&1 || true
-          sleep 1
-          find /tmp -maxdepth 1 -type d -name '.com.google.Chrome*' -exec rm -rf {} + 2>/dev/null || true
-          ps aux | grep -E 'chromedriver|chromium' > chrome_processes_initial.log || true
-          echo "Saved initial Chrome processes to chrome_processes_initial.log"
-
           if [ ! -f fichier_download_list.txt ]; then
             echo "No fichier_download_list.txt found, exiting"
             exit 0

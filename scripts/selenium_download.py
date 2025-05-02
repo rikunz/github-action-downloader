@@ -22,28 +22,6 @@ def setup_logging():
     logger.info("Logging initialized")
     return logger
 
-def clean_chrome_processes():
-    """Clean up Chrome processes and temporary directories."""
-    logger = setup_logging()
-    try:
-        os.system("ps aux | grep -E 'chromedriver|chromium' > chrome_processes.log")
-        logger.info("Logged running Chrome processes to chrome_processes.log")
-        os.system("pkill -9 -f chromedriver >/dev/null 2>&1 || true")
-        os.system("pkill -9 -f chromium >/dev/null 2>&1 || true")
-        time.sleep(1)
-        temp_dirs = [d for d in os.listdir('/tmp') if d.startswith('.com.google.Chrome')]
-        for temp_dir in temp_dirs:
-            try:
-                shutil.rmtree(os.path.join('/tmp', temp_dir))
-                logger.info(f"Removed temporary Chrome data directory: /tmp/{temp_dir}")
-                print(f"Removed temporary Chrome data directory: /tmp/{temp_dir}")
-            except Exception as e:
-                logger.warning(f"Failed to remove /tmp/{temp_dir}: {str(e)}")
-                print(f"Warning: Failed to remove /tmp/{temp_dir}: {str(e)}")
-    except Exception as e:
-        logger.warning(f"Failed to clean Chrome processes: {str(e)}")
-        print(f"Warning: Failed to clean Chrome processes: {str(e)}")
-
 def trigger_1fichier_download(url):
     logger = setup_logging()
     logger.info(f"Starting download for URL: {url}")
@@ -62,8 +40,6 @@ def trigger_1fichier_download(url):
         os.chmod(download_dir, 0o777)
         logger.info(f"Set permissions to 777 for {download_dir}")
         print(f"Set permissions to 777 for {download_dir}")
-
-        clean_chrome_processes()
 
         chrome_options = Options()
         chrome_options.page_load_strategy = 'eager'
