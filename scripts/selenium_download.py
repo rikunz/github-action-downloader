@@ -77,13 +77,7 @@ def trigger_1fichier_download(url, download_dir):
 
         clean_chrome_processes()
 
-        # Create a unique temporary directory for Chrome user data
-        temp_user_data_dir = tempfile.mkdtemp(prefix="chrome-user-data-")
-        logger.info(f"Created temporary user data directory: {temp_user_data_dir}")
-        print(f"Created temporary user data directory: {temp_user_data_dir}")
-
         chrome_options = Options()
-        chrome_options.add_argument(f"--user-data-dir={temp_user_data_dir}")
         chrome_options.page_load_strategy = 'eager'
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
@@ -254,17 +248,6 @@ def trigger_1fichier_download(url, download_dir):
                     print("Saved debug screenshot to debug_screenshot.png")
                     logger.info("Saved debug screenshot to debug_screenshot.png")
                 except Exception as e:
-                    print(f"Failed to save debug screenshot: {str(e)}")
-                    logger.error(f"Failed to save debug screenshot: {str(e)}")
-            # Clean up the temporary user data directory
-            if 'temp_user_data_dir' in locals() and os.path.exists(temp_user_data_dir):
-                try:
-                    shutil.rmtree(temp_user_data_dir)
-                    logger.info(f"Cleaned up temporary user data directory: {temp_user_data_dir}")
-                    print(f"Cleaned up temporary user data directory: {temp_user_data_dir}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean up temporary user data directory: {str(e)}")
-                    print(f"Warning: Failed to clean up temporary user data directory: {str(e)}")
                     print(f"Failed to save debug screenshot: {str(e)}")
                     logger.error(f"Failed to save debug screenshot: {str(e)}")
             return False
