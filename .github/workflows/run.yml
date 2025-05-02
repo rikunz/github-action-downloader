@@ -97,22 +97,13 @@ jobs:
           link=$(echo "$first_link" | awk -F'&af=' '{print $1}' | tr -d '\r\n')
 
           echo "Starting download with Selenium..."
-          for attempt in {1..3}; do
-            echo "Download attempt $attempt of 3"
-            python scripts/selenium_download.py "$link" > selenium_output.txt 2>&1
-            selenium_exit_code=$?
-            echo "Selenium output:"
-            cat selenium_output.txt
-
-            if [ $selenium_exit_code -eq 0 ]; then
-              break
-            fi
-            echo "Download attempt $attempt failed, retrying..."
-            sleep 5
-          done
+          python scripts/selenium_download.py "$link" > selenium_output.txt 2>&1
+          selenium_exit_code=$?
+          echo "Selenium output:"
+          cat selenium_output.txt
 
           if [ $selenium_exit_code -ne 0 ]; then
-            echo "Failed to trigger download with Selenium after 3 attempts."
+            echo "Failed to trigger download with Selenium."
             error_payload=$(jq -n --arg link "$first_link" '{
               embeds: [{
                 title: "❌ Failed to Trigger Download from 1fichier",
