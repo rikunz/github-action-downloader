@@ -39,9 +39,8 @@ jobs:
           echo "Cleaning up existing Chrome processes..."
           pkill -9 -f chromedriver >/dev/null 2>&1 || true
           pkill -9 -f chromium >/dev/null 2>&1 || true
-          sleep 2
+          sleep 1
           find /tmp -maxdepth 1 -type d -name '.com.google.Chrome*' -exec rm -rf {} + 2>/dev/null || true
-          find /tmp -maxdepth 1 -type d -name 'chrome-user-data*' -exec rm -rf {} + 2>/dev/null || true
           ps aux | grep -E 'chromedriver|chromium' > chrome_processes_initial.log || true
           echo "Saved initial Chrome processes to chrome_processes_initial.log"
 
@@ -72,11 +71,9 @@ jobs:
           curl -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
 
           link=$(echo "$first_link" | awk -F'&af=' '{print $1}' | tr -d '\r\n')
-          temp_dir=$(mktemp -d)
-          echo "Temporary directory: $temp_dir"
 
           echo "Starting download with Selenium..."
-          python scripts/selenium_download.py "$link" "$temp_dir" > selenium_output.txt 2>&1
+          python scripts/selenium_download.py "$link" > selenium_output.txt 2>&1
           selenium_exit_code=$?
           echo "Selenium output:"
           cat selenium_output.txt
@@ -111,17 +108,18 @@ jobs:
           timeout=18000
           elapsed=0
           min_size=1048576
+          download_dir="/tmp/downloads"
           while [ $elapsed -lt $timeout ]; do
-            echo "Contents of temp_dir:"
-            ls -lh "$temp_dir"
-            if ls "$temp_dir"/*.crdownload >/dev/null 2>&1; then
-              file=$(ls "$temp_dir"/*.crdownload 2>/dev/null | head -n 1)
+            echo "Contents of download_dir:"
+            ls -lh "$download_dir"
+            if ls "$download_dir"/*.crdownload >/dev/null 2>&1; then
+              file=$(ls "$download_dir"/*.crdownload 2>/dev/null | head -n 1)
               size=$(stat -c %s "$file" 2>/dev/null || echo 0)
               echo "Progress: File $file, Size: $size bytes"
-            elif ls "$temp_dir"/* >/dev/null 2>&1; then
-              filename=$(ls "$temp_dir" | grep -v '\.crdownload' | head -n 1)
+            elif ls "$download_dir"/* >/dev/null 2>&1; then
+              filename=$(ls "$download_dir" | grep -v '\.crdownload' | head -n 1)
               if [ -n "$filename" ]; then
-                size=$(stat -c %s "$temp_dir/$filename")
+                size=$(stat -c %s "$download_dir/$filename")
                 if [ $size -ge $min_size ]; then
                   echo "Download complete: $filename, Size: $size bytes"
                   download_complete=true
@@ -140,10 +138,10 @@ jobs:
           done
 
           if [ "$download_complete" = true ]; then
-            gofile_response=$(curl -s -F "file=@$temp_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
+            gofile_response=$(curl -s -F "file=@$download_dir/$filename" https://${{ env.server }}.gofile.io/uploadFile)
             if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
               gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
-              file_list=$(ls "$temp_dir" | sed 's/^/- /' | paste -sd '\n' -)
+              file_list=$(ls "$download_dir" | sed 's/^/- /' | paste -sd '\n' -)
               upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
               upload_payload=$(jq -n \
                 --arg url "$gofile_url" \
@@ -217,7 +215,7 @@ jobs:
             exit 1
           fi
 
-          rm -rf "$temp_dir" selenium_output.txt
+          rm -rf selenium_output.txt
 
       - name: Upload debug files
         if: failure()

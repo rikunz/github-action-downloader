@@ -2,7 +2,6 @@ import time
 import sys
 import os
 import logging
-import tempfile
 import shutil
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -24,18 +23,15 @@ def setup_logging():
     return logger
 
 def clean_chrome_processes():
-    """Kill any existing Chrome and ChromeDriver processes and clean temp directories."""
+    """Clean up Chrome processes and temporary directories."""
     logger = setup_logging()
     try:
-        logger.info("Checking running Chrome processes before cleanup")
         os.system("ps aux | grep -E 'chromedriver|chromium' > chrome_processes.log")
-        print("Saved running processes to chrome_processes.log")
-
+        logger.info("Logged running Chrome processes to chrome_processes.log")
         os.system("pkill -9 -f chromedriver >/dev/null 2>&1 || true")
         os.system("pkill -9 -f chromium >/dev/null 2>&1 || true")
-        time.sleep(2)
-
-        temp_dirs = [d for d in os.listdir('/tmp') if d.startswith('.com.google.Chrome') or d.startswith('chrome-user-data')]
+        time.sleep(1)
+        temp_dirs = [d for d in os.listdir('/tmp') if d.startswith('.com.google.Chrome')]
         for temp_dir in temp_dirs:
             try:
                 shutil.rmtree(os.path.join('/tmp', temp_dir))
@@ -48,12 +44,13 @@ def clean_chrome_processes():
         logger.warning(f"Failed to clean Chrome processes: {str(e)}")
         print(f"Warning: Failed to clean Chrome processes: {str(e)}")
 
-def trigger_1fichier_download(url, download_dir):
+def trigger_1fichier_download(url):
     logger = setup_logging()
-    logger.info(f"Starting download for URL: {url}, Download dir: {download_dir}")
-    print(f"Starting download for URL: {url}, Download dir: {download_dir}")
+    logger.info(f"Starting download for URL: {url}")
+    print(f"Starting download for URL: {url}")
 
     try:
+        download_dir = "/tmp/downloads"
         if not os.path.exists(download_dir):
             os.makedirs(download_dir, mode=0o777)
             logger.info(f"Created download directory: {download_dir}")
@@ -68,27 +65,17 @@ def trigger_1fichier_download(url, download_dir):
 
         clean_chrome_processes()
 
-        user_data_dir = tempfile.mkdtemp(prefix="chrome-user-data-")
-        logger.info(f"Using temporary user data directory: {user_data_dir}")
-        print(f"Using temporary user data directory: {user_data_dir}")
-
         chrome_options = Options()
-        chrome_options.page_load_strategy = 'normal'
+        chrome_options.page_load_strategy = 'eager'
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-popup-blocking")
-        chrome_options.add_argument("--disable-notifications")
-        chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         chrome_options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
             "download.prompt_for_download": False,
             "download.directory_upgrade": True,
-            "safebrowsing.enabled": False,
-            "safebrowsing_for_trusted_sources_enabled": False,
-            "profile.default_content_settings.popups": 0
+            "safebrowsing.enabled": True
         })
-        chrome_options.set_capability('goog:loggingPrefs', {'browser': 'ALL', 'driver': 'ALL'})
 
         try:
             service = Service('/usr/bin/chromedriver', log_path="chromedriver.log")
@@ -136,10 +123,10 @@ def trigger_1fichier_download(url, download_dir):
 
             print("Waiting for dlb input to be visible and clickable...")
             try:
-                dlb_input = WebDriverWait(driver, 60).until(
+                dlb_input = WebDriverWait(driver, 50).until(
                     EC.visibility_of_element_located((By.ID, "dlb"))
                 )
-                WebDriverWait(driver, 60).until(
+                WebDriverWait(driver, 50).until(
                     EC.element_to_be_clickable((By.ID, "dlb"))
                 )
                 try:
@@ -166,45 +153,23 @@ def trigger_1fichier_download(url, download_dir):
                     logger.error(f"Failed to save debug screenshot: {str(e)}")
                 return False
 
-            print("Checking for ad overlays...")
+            print("Waiting for ok-btn-general input...")
             try:
-                ad_close_buttons = driver.find_elements(By.CSS_SELECTOR, ".st-placement.inScreen [id*='close'], .st-adunit [id*='close'], [id*='r89-'] [id*='close']")
-                for btn in ad_close_buttons:
-                    if btn.is_displayed() and btn.is_enabled():
-                        try:
-                            driver.execute_script("arguments[0].click();", btn)
-                            print("Closed ad overlay")
-                            logger.info("Closed ad overlay")
-                            time.sleep(1)
-                        except:
-                            print("Failed to close ad overlay, continuing...")
-                            logger.warning("Failed to close ad overlay")
-            except NoSuchElementException:
-                print("No ad close buttons found.")
-                logger.info("No ad close buttons found")
-
-            print("Waiting for ok-btn-general link...")
-            try:
-                ok_button = WebDriverWait(driver, 30).until(
-                    EC.element_to_be_clickable((By.XPATH, "//a[contains(@class, 'ok') and contains(@class, 'btn-general')]"))
+                ok_button = WebDriverWait(driver, 20).until(
+                    EC.element_to_be_clickable((By.XPATH, "//input[contains(@class, 'ok-btn-general')]"))
                 )
-                download_url = ok_button.get_attribute("href")
-                print(f"Found download URL: {download_url}")
-                logger.info(f"Found download URL: {download_url}")
-                driver.execute_script("arguments[0].scrollIntoView(true);", ok_button)
-                time.sleep(0.5)
                 try:
                     ok_button.click()
-                    print("Clicked ok-btn-general link")
-                    logger.info("Clicked ok-btn-general link")
+                    print("Clicked ok-btn-general input")
+                    logger.info("Clicked ok-btn-general input")
                 except WebDriverException:
                     print("Normal click failed, attempting JavaScript click...")
                     driver.execute_script("arguments[0].click();", ok_button)
-                    print("Clicked ok-btn-general link via JavaScript")
-                    logger.info("Clicked ok-btn-general link via JavaScript")
+                    print("Clicked ok-btn-general input via JavaScript")
+                    logger.info("Clicked ok-btn-general input via JavaScript")
             except TimeoutException:
-                print("Timeout waiting for ok-btn-general link.")
-                logger.error("Timeout waiting for ok-btn-general link")
+                print("Timeout waiting for ok-btn-general input.")
+                logger.error("Timeout waiting for ok-btn-general input")
                 with open("debug_page.html", "w", encoding="utf-8") as f:
                     f.write(driver.page_source)
                 print("Saved page source to debug_page.html for inspection")
@@ -219,11 +184,8 @@ def trigger_1fichier_download(url, download_dir):
 
             print("Waiting for download to initiate...")
             time.sleep(60)
-            browser_logs = driver.get_log('browser')
-            print("Browser logs:")
-            for entry in browser_logs:
-                print(f"[{entry['level']}] {entry['message']}")
-                logger.info(f"Browser log: [{entry['level']}] {entry['message']}")
+            print(f"Download process initiated successfully. File should be saved to {download_dir}")
+            logger.info(f"Download process initiated successfully. File should be saved to {download_dir}")
             print(f"Contents of download directory {download_dir}:")
             dir_contents = os.listdir(download_dir) if os.path.exists(download_dir) else []
             print(dir_contents if dir_contents else "Empty")
@@ -262,7 +224,7 @@ def trigger_1fichier_download(url, download_dir):
             return False
 
         finally:
-            pass
+            pass  # Tidak menutup browser agar unduhan berlanjut
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
@@ -270,13 +232,12 @@ def trigger_1fichier_download(url, download_dir):
         return False
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python selenium_download.py <url> <download_dir>")
+    if len(sys.argv) != 2:
+        print("Usage: python selenium_download.py <url>")
         sys.exit(1)
 
     url = sys.argv[1]
-    download_dir = sys.argv[2]
-    success = trigger_1fichier_download(url, download_dir)
+    success = trigger_1fichier_download(url)
     if success:
         print("Download triggered successfully!")
         sys.exit(0)
