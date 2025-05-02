@@ -76,28 +76,34 @@ def trigger_1fichier_download(url):
 
         # Configure Chrome options
         chrome_options = Options()
-        chrome_options.page_load_strategy = 'normal'
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--headless")  # Run in headless mode for CI/CD environments
-        # Make Chrome less detectable as automation/bot
+        chrome_options.page_load_strategy = 'eager'
+        chrome_options.add_argument("--headless")  # Uncomment for headless mode
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option("useAutomationExtension", False)
+        # Custom prefs: block everything except automatic_downloads and javascript
+        custom_prefs = {
+            'profile.default_content_setting_values': {
+            'cookies': 2, 'images': 2, 'plugins': 2, 'popups': 2, 'geolocation': 2,
+            'notifications': 2, 'auto_select_certificate': 2, 'fullscreen': 2,
+            'mouselock': 2, 'mixed_script': 2, 'media_stream': 2,
+            'media_stream_mic': 2, 'media_stream_camera': 2, 'protocol_handlers': 2,
+            'ppapi_broker': 2, 'midi_sysex': 2, 'push_messaging': 2,
+            'ssl_cert_decisions': 2, 'metro_switch_to_desktop': 2,
+            'protected_media_identifier': 2, 'app_banner': 2, 'site_engagement': 2,
+            'durable_storage': 2
+            # 'automatic_downloads' and 'javascript' intentionally omitted
+            }
+        }
         chrome_options.add_experimental_option("prefs", {
-            "download.default_directory": download_dir,
+            "download.default_directory": str(download_dir.resolve()),
             "download.prompt_for_download": False,
             "download.directory_upgrade": True,
-            "safebrowsing.enabled": True
+            "safebrowsing.enabled": True,
+            **custom_prefs
         })
-        # Further reduce automation detection
-        chrome_options.add_argument("--disable-infobars")
-        chrome_options.add_argument("--disable-extensions")
-        chrome_options.add_argument("--profile-directory=Default")
-        chrome_options.add_argument("--disable-plugins-discovery")
-        chrome_options.add_argument("--start-maximized")
-        chrome_options.add_argument("--disable-popup-blocking")
+
 
         try:
             service = Service('/usr/bin/chromedriver')
