@@ -158,58 +158,32 @@ def trigger_1fichier_download(url):
                 return False
 
             # Wait for the OK button to appear and click it
-            print("Waiting for ok-btn-general input...")
+            print("Waiting for ok-btn-general link...")
             try:
-                # Try different selectors for the OK button
-                selectors = [
-                    "//input[contains(@class, 'ok-btn-general')]",
-                    "//input[contains(@class, 'ok')]",
-                    "//button[contains(@class, 'ok')]",
-                    "//*[contains(@class, 'ok-btn')]"
-                ]
-                
-                # Try each selector
-                ok_button = None
-                for selector in selectors:
-                    try:
-                        ok_button = WebDriverWait(driver, 10).until(
-                            EC.element_to_be_clickable((By.XPATH, selector))
-                        )
-                        print(f"Found OK button with selector: {selector}")
-                        logger.info(f"Found OK button with selector: {selector}")
-                        break
-                    except:
-                        continue
-                
-                if ok_button:
-                    try:
-                        ok_button.click()
-                        print("Clicked ok button directly")
-                        logger.info("Clicked ok button directly")
-                    except Exception as e:
-                        print(f"Direct click failed: {str(e)}. Trying JavaScript click...")
-                        driver.execute_script("arguments[0].click();", ok_button)
-                        print("Clicked ok button via JavaScript")
-                        logger.info("Clicked ok button via JavaScript")
-                else:
-                    print("Could not find the OK button with any of the selectors")
-                    logger.warning("Could not find the OK button with any of the selectors")
-                    # Continue anyway, as the download might have started
+                ok_button = WebDriverWait(driver, 30).until(
+                    EC.element_to_be_clickable((By.XPATH, "//a[contains(@class, 'ok') and contains(@class, 'btn-general')]"))
+                )
+                download_url = ok_button.get_attribute("href")
+                print(f"Found download URL: {download_url}")
+                logger.info(f"Found download URL: {download_url}")
+                driver.execute_script("arguments[0].scrollIntoView(true);", ok_button)
+                time.sleep(0.5)
+                try:
+                    ok_button.click()
+                    print("Clicked ok-btn-general link")
+                    logger.info("Clicked ok-btn-general link")
+                except WebDriverException:
+                    print("Normal click failed, attempting JavaScript click...")
+                    driver.execute_script("arguments[0].click();", ok_button)
+                    print("Clicked ok-btn-general link via JavaScript")
+                    logger.info("Clicked ok-btn-general link via JavaScript")
             except TimeoutException:
-                print("Timeout waiting for ok-btn-general input.")
-                logger.error("Timeout waiting for ok-btn-general input")
+                print("Timeout waiting for ok-btn-general link.")
+                logger.error("Timeout waiting for ok-btn-general link")
                 with open("debug_page.html", "w", encoding="utf-8") as f:
                     f.write(driver.page_source)
                 print("Saved page source to debug_page.html for inspection")
-                
-                try:
-                    driver.save_screenshot("debug_screenshot.png")
-                    print("Saved debug screenshot to debug_screenshot.png")
-                    logger.info("Saved debug screenshot to debug_screenshot.png")
-                except Exception as e:
-                    print(f"Failed to save debug screenshot: {str(e)}")
-                    logger.error(f"Failed to save debug screenshot: {str(e)}")
-                # Continue anyway as download might still proceed
+                return False
 
             # Wait for download to start
             print("Waiting for download to initiate...")
