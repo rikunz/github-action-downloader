@@ -119,6 +119,10 @@ jobs:
             exit 0
           }
 
+          # Sanitize $firstLink for JSON safety
+          $firstLink = $firstLink -replace '[^\x20-\x7E]', '' -replace '"', '\"' -replace '\r\n|\n|\r', ''
+          Write-Host "Sanitized firstLink: $firstLink"
+
           Write-Host "Processing $firstLink"
 
           # Create download directory
@@ -139,8 +143,19 @@ jobs:
                 color = 5814783
               }
             )
-          } | ConvertTo-Json -Depth 10
-          Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $startPayload
+          }
+          # Convert to JSON and log for debugging
+          $jsonPayload = $startPayload | ConvertTo-Json -Depth 10
+          Write-Host "Start payload JSON: $jsonPayload"
+          # Encode as UTF-8 bytes
+          $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonPayload)
+          
+          try {
+            Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json; charset=utf-8" -Body $payloadBytes
+          } catch {
+            Write-Host "Failed to send Discord notification: $_"
+            exit 1
+          }
 
           $link = $firstLink -replace '&af=.*$', '' -replace '\r\n', ''
 
@@ -158,8 +173,15 @@ jobs:
                   color = 16711680
                 }
               )
-            } | ConvertTo-Json -Depth 10
-            Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $errorPayload
+            }
+            $jsonPayload = $errorPayload | ConvertTo-Json -Depth 10
+            Write-Host "Error payload JSON: $jsonPayload"
+            $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonPayload)
+            try {
+              Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json; charset=utf-8" -Body $payloadBytes
+            } catch {
+              Write-Host "Failed to send Discord error notification: $_"
+            }
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt
@@ -192,8 +214,15 @@ jobs:
                   color = 16711680
                 }
               )
-            } | ConvertTo-Json -Depth 10
-            Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $errorPayload
+            }
+            $jsonPayload = $errorPayload | ConvertTo-Json -Depth 10
+            Write-Host "Error payload JSON: $jsonPayload"
+            $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonPayload)
+            try {
+              Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json; charset=utf-8" -Body $payloadBytes
+            } catch {
+              Write-Host "Failed to send Discord error notification: $_"
+            }
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt
@@ -214,8 +243,15 @@ jobs:
                   color = 16711680
                 }
               )
-            } | ConvertTo-Json -Depth 10
-            Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $errorPayload
+            }
+            $jsonPayload = $errorPayload | ConvertTo-Json -Depth 10
+            Write-Host "Error payload JSON: $jsonPayload"
+            $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonPayload)
+            try {
+              Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json; charset=utf-8" -Body $payloadBytes
+            } catch {
+              Write-Host "Failed to send Discord error notification: $_"
+            }
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt
@@ -245,8 +281,15 @@ jobs:
                   color = 5814783
                 }
               )
-            } | ConvertTo-Json -Depth 10
-            Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $uploadPayload
+            }
+            $jsonPayload = $uploadPayload | ConvertTo-Json -Depth 10
+            Write-Host "Upload payload JSON: $jsonPayload"
+            $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonPayload)
+            try {
+              Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json; charset=utf-8" -Body $payloadBytes
+            } catch {
+              Write-Host "Failed to send Discord upload notification: $_"
+            }
             
             # Remove processed link from list
             Get-Content -Path fichier_download_list.txt | Select-Object -Skip 1 | Set-Content -Path temp.txt
@@ -270,8 +313,15 @@ jobs:
                   color = 16711680
                 }
               )
-            } | ConvertTo-Json -Depth 10
-            Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $errorPayload
+            }
+            $jsonPayload = $errorPayload | ConvertTo-Json -Depth 10
+            Write-Host "Error payload JSON: $jsonPayload"
+            $payloadBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonPayload)
+            try {
+              Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json; charset=utf-8" -Body $payloadBytes
+            } catch {
+              Write-Host "Failed to send Discord error notification: $_"
+            }
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt
