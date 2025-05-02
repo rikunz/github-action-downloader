@@ -3,10 +3,10 @@ name: 1fichier Download and Upload to Gofile with Notifications
 on:
   push:
     branches:
-      - fichier
+      - fichier_windows
   pull_request:
     branches:
-      - fichier
+      - fichier_windows
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   download-and-upload:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 30  # Prevent early termination
 
     steps:
@@ -24,207 +24,224 @@ jobs:
           token: ${{ secrets.TOKEN }}
 
       - name: Install dependencies
+        shell: powershell
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq chromium-browser chromium-chromedriver
+          choco install -y jq python googlechrome
           pip install requests beautifulsoup4 selenium
-          chromium-browser --version
-          chromedriver --version
-          which chromedriver
-          ls -l /usr/bin/chromedriver
+          # Download and extract ChromeDriver
+          $chromeVersion = (Get-Item "C:\Program Files\Google\Chrome\Application\chrome.exe").VersionInfo.ProductVersion -replace '\.\d+$'
+          $driverUrl = "https://storage.googleapis.com/chrome-for-testing-public/$chromeVersion/win64/chromedriver-win64.zip"
+          Invoke-WebRequest -Uri $driverUrl -OutFile chromedriver.zip
+          Expand-Archive -Path chromedriver.zip -DestinationPath .
+          Move-Item -Path chromedriver-win64\chromedriver.exe -Destination .
+          Remove-Item -Path chromedriver.zip, chromedriver-win64 -Recurse
+          # Log versions
+          Write-Host "Chrome version: $chromeVersion"
+          ./chromedriver.exe --version
+          python --version
+          pip list
 
       - name: Get Gofile server
         id: gofile_server
+        shell: powershell
         run: |
-          response=$(curl -s https://api.gofile.io/servers)
-          echo "Raw Gofile API response: $response"
+          $response = Invoke-RestMethod -Uri "https://api.gofile.io/servers"
+          Write-Host "Raw Gofile API response: $($response | ConvertTo-Json -Depth 10)"
 
-          preferred_zones='["asia", "eu", "na"]'
-          server="store1"
+          $preferredZones = @("asia", "eu", "na")
+          $server = "store1"
 
-          if echo "$response" | jq -e '.data.serversAllZone' > /dev/null 2>&1; then
-            for zone in $(echo $preferred_zones | jq -r '.[]'); do
-              candidate=$(echo "$response" | jq -r --arg zone "$zone" '.data.serversAllZone[] | select(.zone == $zone) | .name' | head -n 1)
-              if [ -n "$candidate" ]; then
-                server="$candidate"
+          if ($response.data.serversAllZone) {
+            foreach ($zone in $preferredZones) {
+              $candidate = $response.data.serversAllZone | Where-Object { $_.zone -eq $zone } | Select-Object -First 1 -ExpandProperty name
+              if ($candidate) {
+                $server = $candidate
                 break
-              fi
-            done
-            echo "Selected server based on preferred zone: $server"
-          else
-            echo "Failed to get valid servers list, using fallback: $server"
-          fi
+              }
+            }
+            Write-Host "Selected server based on preferred zone: $server"
+          } else {
+            Write-Host "Failed to get valid servers list, using fallback: $server"
+          }
 
-          echo "server=$server" >> $GITHUB_ENV
+          "server=$server" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Process First 1fichier Link
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        shell: powershell
         run: |
-          if [ ! -f fichier_download_list.txt ]; then
-            echo "No fichier_download_list.txt found, exiting"
+          if (-not (Test-Path "fichier_download_list.txt")) {
+            Write-Host "No fichier_download_list.txt found, exiting"
             exit 0
-          fi
+          }
 
-          first_link=$(head -n 1 fichier_download_list.txt)
-          if [ -z "$first_link" ]; then
-            echo "fichier_download_list.txt is empty, exiting"
+          $firstLink = Get-Content -Path "fichier_download_list.txt" -TotalCount 1
+          if (-not $firstLink) {
+            Write-Host "fichier_download_list.txt is empty, exiting"
             exit 0
-          fi
+          }
 
-          echo "Processing $first_link"
+          Write-Host "Processing $firstLink"
 
-          # Create download directory with proper permissions
-          download_dir="$GITHUB_WORKSPACE/downloads"
-          mkdir -p "$download_dir"
-          chmod 777 "$download_dir"
-          ls -ld "$download_dir"  # Log directory permissions
-          echo "Created download directory with proper permissions"
+          # Create download directory
+          $downloadDir = "$env:GITHUB_WORKSPACE\downloads"
+          New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+          Write-Host "Created download directory: $downloadDir"
+          Get-Item $downloadDir | Format-List -Property *
 
-          start_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          start_payload=$(jq -n --arg link "$first_link" --arg time "$start_time" '{
-            embeds: [{
-              title: "📥 Starting 1fichier Download",
-              fields: [
-                { name: "1fichier Link", value: "\($link)", inline: true },
-                { name: "Started At", value: $time, inline: true }
-              ],
-              color: 5814783
-            }]
-          }')
-          curl -X POST -H "Content-Type: application/json" -d "$start_payload" "$DISCORD_WEBHOOK_URL"
+          $startTime = (Get-Date -AsUTC).ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $startPayload = @{
+            embeds = @(
+              @{
+                title = "📥 Starting 1fichier Download"
+                fields = @(
+                  @{ name = "1fichier Link"; value = $firstLink; inline = $true }
+                  @{ name = "Started At"; value = $startTime; inline = $true }
+                )
+                color = 5814783
+              }
+            )
+          } | ConvertTo-Json -Depth 10
+          Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $startPayload
 
-          link=$(echo "$first_link" | awk -F'&af=' '{print $1}' | tr -d '\r\n')
+          $link = $firstLink -replace '&af=.*$', '' -replace '\r\n', ''
 
-          echo "Starting download with Selenium..."
-          python -u scripts/selenium_download.py "$link" 2>&1 | tee selenium_download.log
-          selenium_exit_code=$?
+          Write-Host "Starting download with Selenium..."
+          python -u scripts\selenium_download.py $link 2>&1 | Tee-Object -FilePath selenium_download.log
+          $seleniumExitCode = $LASTEXITCODE
 
-          if [ $selenium_exit_code -ne 0 ]; then
-            echo "Failed to trigger download with Selenium."
-            error_payload=$(jq -n --arg link "$first_link" '{
-              embeds: [{
-                title: "❌ Failed to Trigger Download from 1fichier",
-                description: "Link: \($link)\nCheck logs, screenshots, and debug files for details",
-                color: 16711680
-              }]
-            }')
-            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+          if ($seleniumExitCode -ne 0) {
+            Write-Host "Failed to trigger download with Selenium."
+            $errorPayload = @{
+              embeds = @(
+                @{
+                  title = "❌ Failed to Trigger Download from 1fichier"
+                  description = "Link: $firstLink`nCheck logs, screenshots, and debug files for details"
+                  color = 16711680
+                }
+              )
+            } | ConvertTo-Json -Depth 10
+            Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $errorPayload
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt
-            git commit -m "Failed to process first link: $first_link"
+            git commit -m "Failed to process first link: $firstLink"
             git push
             exit 1
-          fi
+          }
 
-          echo "Download completed by Selenium script."
-          echo "Disk space:"
-          df -h
-          echo "Running Chrome processes:"
-          ps aux | grep -E 'chromedriver|chromium' > chrome_processes_final.log || true
-          cat chrome_processes_final.log
+          Write-Host "Download completed by Selenium script."
+          Write-Host "Disk space:"
+          Get-CimInstance -ClassName Win32_LogicalDisk | Format-Table -Property DeviceID, @{Label="Size(GB)";Expression={[math]::Round($_.Size/1GB,2)}}, @{Label="Free(GB)";Expression={[math]::Round($_.FreeSpace/1GB,2)}}
+          Write-Host "Running Chrome processes:"
+          Get-Process | Where-Object { $_.Name -like "*chrome*" -or $_.Name -like "*chromedriver*" } | Select-Object -Property Id, ProcessName, CPU | Format-Table -AutoSize > chrome_processes_final.log
+          Get-Content chrome_processes_final.log
 
-          echo "Checking download directory contents..."
-          ls -l "$download_dir"
+          Write-Host "Checking download directory contents..."
+          Get-ChildItem -Path $downloadDir | Format-Table -AutoSize
 
-          echo "Starting Gofile upload process..."
-          min_size=102400  # 100KB minimum size to filter out temporary files
-          completed_file=$(find "$download_dir" -type f -not -name "*.crdownload" -not -name "*.tmp" -not -name ".org.chromium.*" | head -n 1)
+          Write-Host "Starting Gofile upload process..."
+          $minSize = 102400  # 100KB minimum size
+          $completedFile = Get-ChildItem -Path $downloadDir -File | Where-Object { $_.Name -notlike "*.crdownload" -and $_.Name -notlike "*.tmp" -and $_.Name -notlike ".org.chromium.*" } | Select-Object -First 1 -ExpandProperty FullName
           
-          if [ -z "$completed_file" ]; then
-            echo "No valid completed file found in download directory."
-            error_payload=$(jq -n --arg link "$first_link" '{
-              embeds: [{
-                title: "❌ No Valid File Downloaded from 1fichier",
-                description: "Link: \($link)\nCheck logs, screenshots, and debug files for details",
-                color: 16711680
-              }]
-            }')
-            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+          if (-not $completedFile) {
+            Write-Host "No valid completed file found in download directory."
+            $errorPayload = @{
+              embeds = @(
+                @{
+                  title = "❌ No Valid File Downloaded from 1fichier"
+                  description = "Link: $firstLink`nCheck logs, screenshots, and debug files for details"
+                  color = 16711680
+                }
+              )
+            } | ConvertTo-Json -Depth 10
+            Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $errorPayload
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt
-            git commit -m "Failed to process first link: $first_link"
+            git commit -m "Failed to process first link: $firstLink"
             git push
             exit 1
-          fi
+          }
 
-          completed_basename=$(basename "$completed_file")
-          size=$(stat -c %s "$completed_file")
-          if [ $size -lt $min_size ]; then
-            echo "File $completed_basename is too small ($size bytes), failing..."
-            error_payload=$(jq -n --arg link "$first_link" --arg size "$size" '{
-              embeds: [{
-                title: "❌ Downloaded File Too Small",
-                description: "Link: \($link)\nFile size: \($size) bytes\nCheck logs, screenshots, and debug files for details",
-                color: 16711680
-              }]
-            }')
-            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+          $completedBasename = [System.IO.Path]::GetFileName($completedFile)
+          $size = (Get-Item $completedFile).Length
+          if ($size -lt $minSize) {
+            Write-Host "File $completedBasename is too small ($size bytes), failing..."
+            $errorPayload = @{
+              embeds = @(
+                @{
+                  title = "❌ Downloaded File Too Small"
+                  description = "Link: $firstLink`nFile size: $size bytes`nCheck logs, screenshots, and debug files for details"
+                  color = 16711680
+                }
+              )
+            } | ConvertTo-Json -Depth 10
+            Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $errorPayload
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt
-            git commit -m "Failed to process first link: $first_link"
+            git commit -m "Failed to process first link: $firstLink"
             git push
             exit 1
-          fi
+          }
 
-          echo "Uploading file: $completed_file (size: $size bytes)"
-          gofile_response=$(curl -s -F "file=@$completed_file" "https://${{ env.server }}.gofile.io/uploadFile")
-          echo "Gofile response: $gofile_response"
+          Write-Host "Uploading file: $completedFile (size: $size bytes)"
+          $gofileResponse = curl -s -F "file=@$completedFile" "https://$env:server.gofile.io/uploadFile"
+          Write-Host "Gofile response: $gofileResponse"
           
-          if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
-            gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
-            file_info="- $completed_basename ($(du -h "$completed_file" | cut -f1))"
-            upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-            upload_payload=$(jq -n \
-              --arg url "$gofile_url" \
-              --arg link "$first_link" \
-              --arg time "$upload_time" \
-              --arg files "$file_info" '{
-                embeds: [{
-                  title: "📤 File Uploaded to Gofile!",
-                  description: "Downloaded files:\n\($files)",
-                  fields: [
-                    { name: "Download Link", value: "[Download from Gofile](\($url))", inline: true },
-                    { name: "Source 1fichier Link", value: "\($link)", inline: true },
-                    { name: "Uploaded At", value: $time, inline: true }
-                  ],
-                  color: 5814783
-                }]
-              }')
-            curl -X POST -H "Content-Type: application/json" -d "$upload_payload" "$DISCORD_WEBHOOK_URL"
+          if ($gofileResponse | ConvertFrom-Json | Select-Object -ExpandProperty status -eq "ok") {
+            $gofileUrl = $gofileResponse | ConvertFrom-Json | Select-Object -ExpandProperty data | Select-Object -ExpandProperty downloadPage
+            $fileInfo = "- $completedBasename ($([math]::Round($size/1MB,2)) MB)"
+            $uploadTime = (Get-Date -AsUTC).ToString("yyyy-MM-ddTHH:mm:ssZ")
+            $uploadPayload = @{
+              embeds = @(
+                @{
+                  title = "📤 File Uploaded to Gofile!"
+                  description = "Downloaded files:`n$fileInfo"
+                  fields = @(
+                    @{ name = "Download Link"; value = "[Download from Gofile]($gofileUrl)"; inline = $true }
+                    @{ name = "Source 1fichier Link"; value = $firstLink; inline = $true }
+                    @{ name = "Uploaded At"; value = $uploadTime; inline = $true }
+                  )
+                  color = 5814783
+                }
+              )
+            } | ConvertTo-Json -Depth 10
+            Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $uploadPayload
             
             # Remove processed link from list
-            tail -n +2 fichier_download_list.txt > temp.txt
-            mv temp.txt fichier_download_list.txt
+            Get-Content -Path fichier_download_list.txt | Select-Object -Skip 1 | Set-Content -Path temp.txt
+            Move-Item -Path temp.txt -Destination fichier_download_list.txt -Force
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt
-            if [ -s fichier_download_list.txt ]; then
+            if ((Get-Content fichier_download_list.txt | Measure-Object -Line).Lines -gt 0) {
               git commit -m "Processed first link, removed from fichier_download_list.txt"
-            else
+            } else {
               git commit -m "Processed last link, fichier_download_list.txt is now empty"
-            fi
+            }
             git push
-          else
-            echo "Failed to upload to Gofile."
-            error_payload=$(jq -n --arg link "$first_link" --arg response "$gofile_response" '{
-              embeds: [{
-                title: "❌ Failed to Upload to Gofile",
-                description: "Link: \($link)\nGofile response: \($response)",
-                color: 16711680
-              }]
-            }')
-            curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
+          } else {
+            Write-Host "Failed to upload to Gofile."
+            $errorPayload = @{
+              embeds = @(
+                @{
+                  title = "❌ Failed to Upload to Gofile"
+                  description = "Link: $firstLink`nGofile response: $gofileResponse"
+                  color = 16711680
+                }
+              )
+            } | ConvertTo-Json -Depth 10
+            Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType "application/json" -Body $errorPayload
             git config user.name "GitHub Actions"
             git config user.email "actions@github.com"
             git add fichier_download_list.txt
-            git commit -m "Failed to process first link: $first_link"
+            git commit -m "Failed to process first link: $firstLink"
             git push
             exit 1
-          fi
+          }
 
       - name: Upload debug files
         uses: actions/upload-artifact@v4

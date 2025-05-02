@@ -24,6 +24,10 @@ def setup_logging():
 def monitor_download(download_dir, timeout=600, logger=None):
     """Monitor download progress by checking for .crdownload or completed files."""
     start_time = time.time()
+    last_size = 0
+    stall_count = 0
+    max_stall_attempts = 3  # Number of consecutive checks with no size change
+
     while time.time() - start_time < timeout:
         files = os.listdir(download_dir) if os.path.exists(download_dir) else []
         crdownload_files = [f for f in files if f.endswith(".crdownload")]
@@ -40,11 +44,23 @@ def monitor_download(download_dir, timeout=600, logger=None):
             size = os.path.getsize(file_path)
             logger.info(f"Download in progress: {file_path}, size: {size} bytes")
             print(f"Download in progress: {file_path}, size: {size} bytes")
+            if size == last_size and size > 0:
+                stall_count += 1
+                logger.info(f"Download stalled at {size} bytes, attempt {stall_count}/{max_stall_attempts}")
+                print(f"Download stalled at {size} bytes, attempt {stall_count}/{max_stall_attempts}")
+                if stall_count >= max_stall_attempts:
+                    logger.error(f"Download stalled after {max_stall_attempts} attempts")
+                    print(f"Download stalled after {max_stall_attempts} attempts")
+                    return False
+            else:
+                stall_count = 0
+            last_size = size
         else:
             logger.info("No download files found yet")
             print("No download files found yet")
         
         time.sleep(10)
+    
     logger.error("Download timed out")
     print("Download timed out")
     return False
@@ -57,18 +73,13 @@ def trigger_1fichier_download(url):
     driver = None
     try:
         # Create and setup download directory
-        download_dir = os.path.join(os.getenv("GITHUB_WORKSPACE", "/tmp"), "downloads")
+        download_dir = os.path.join(os.getenv("GITHUB_WORKSPACE", os.getcwd()), "downloads")
         if not os.path.exists(download_dir):
             os.makedirs(download_dir, exist_ok=True)
             logger.info(f"Created download directory: {download_dir}")
             print(f"Created download directory: {download_dir}")
         
-        # Ensure directory has proper permissions
-        os.chmod(download_dir, 0o777)
-        logger.info(f"Set permissions to 777 for {download_dir}")
-        print(f"Set permissions to 777 for {download_dir}")
-
-        # Check directory permissions
+        # Check directory permissions (Windows uses NTFS, no chmod needed)
         if not os.access(download_dir, os.W_OK):
             logger.error(f"No write permission for {download_dir}")
             print(f"Error: No write permission for {download_dir}. Please check directory permissions.")
@@ -76,37 +87,21 @@ def trigger_1fichier_download(url):
 
         # Configure Chrome options
         chrome_options = Options()
-        chrome_options.page_load_strategy = 'normal'
-        chrome_options.add_argument("--headless")  # Uncomment for headless mode
+        chrome_options.page_load_strategy = 'eager'
+        chrome_options.add_argument("--headless")
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option("useAutomationExtension", False)
-        # Custom prefs: block everything except automatic_downloads and javascript
-        custom_prefs = {
-            'profile.default_content_setting_values': {
-            'cookies': 2, 'images': 2, 'plugins': 2, 'popups': 2, 'geolocation': 2,
-            'notifications': 2, 'auto_select_certificate': 2, 'fullscreen': 2,
-            'mouselock': 2, 'mixed_script': 2, 'media_stream': 2,
-            'media_stream_mic': 2, 'media_stream_camera': 2, 'protocol_handlers': 2,
-            'ppapi_broker': 2, 'midi_sysex': 2, 'push_messaging': 2,
-            'ssl_cert_decisions': 2, 'metro_switch_to_desktop': 2,
-            'protected_media_identifier': 2, 'app_banner': 2, 'site_engagement': 2,
-            'durable_storage': 2
-            # 'automatic_downloads' and 'javascript' intentionally omitted
-            }
-        }
         chrome_options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
             "download.prompt_for_download": False,
             "download.directory_upgrade": True,
-            "safebrowsing.enabled": True,
-            **custom_prefs
+            "safebrowsing.enabled": True
         })
 
-
         try:
-            service = Service('/usr/bin/chromedriver')
+            service = Service(os.path.join(os.getcwd(), "chromedriver.exe"))
             logger.info("Attempting to initialize ChromeDriver")
             print("Attempting to initialize ChromeDriver")
             driver = webdriver.Chrome(service=service, options=chrome_options)
@@ -236,7 +231,7 @@ def trigger_1fichier_download(url):
             # Monitor download progress
             print("Monitoring download progress...")
             logger.info("Monitoring download progress")
-            if not monitor_download(download_dir, timeout=3600*8, logger=logger):
+            if not monitor_download(download_dir, timeout=600, logger=logger):
                 print("Download failed or timed out")
                 logger.error("Download failed or timed out")
                 return False
@@ -280,21 +275,12 @@ def trigger_1fichier_download(url):
                     logger.error(f"Failed to save debug screenshot: {str(e)}")
             return False
 
-        finally:
-            # Close browser only after download is complete or timed out
-            if driver:
-                try:
-                    driver.quit()
-                    logger.info("Closed browser")
-                    print("Closed browser")
-                except Exception as e:
-                    logger.error(f"Error closing browser: {str(e)}")
-                    print(f"Error closing browser: {str(e)}")
-
-    except Exception as e:
-        print(f"Unexpected error: {str(e)}")
-        logger.error(f"Unexpected error: {str(e)}")
-        return False
+        except Exception as e:
+            print(f"Unexpected error: {str(e)}")
+            logger.error(f"Unexpected error: {str(e)}")
+            return False
+    finally:
+        pass
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
