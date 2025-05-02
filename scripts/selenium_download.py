@@ -236,7 +236,7 @@ def trigger_1fichier_download(url):
             # Monitor download progress
             print("Monitoring download progress...")
             logger.info("Monitoring download progress")
-            if not monitor_download(download_dir, timeout=600, logger=logger):
+            if not monitor_download(download_dir, timeout=3600*8, logger=logger):
                 print("Download failed or timed out")
                 logger.error("Download failed or timed out")
                 return False
