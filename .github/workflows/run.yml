@@ -3,10 +3,10 @@ name: 1fichier Download and Upload to Gofile with Notifications
 on:
   push:
     branches:
-      - fichier_windows
+      - fichier
   pull_request:
     branches:
-      - fichier_windows
+      - fichier
   workflow_dispatch:
 
 permissions:
@@ -26,20 +26,49 @@ jobs:
       - name: Install dependencies
         shell: powershell
         run: |
-          choco install -y jq python googlechrome
-          pip install requests beautifulsoup4 selenium
-          # Download and extract ChromeDriver
-          $chromeVersion = (Get-Item "C:\Program Files\Google\Chrome\Application\chrome.exe").VersionInfo.ProductVersion -replace '\.\d+$'
-          $driverUrl = "https://storage.googleapis.com/chrome-for-testing-public/$chromeVersion/win64/chromedriver-win64.zip"
-          Invoke-WebRequest -Uri $driverUrl -OutFile chromedriver.zip
-          Expand-Archive -Path chromedriver.zip -DestinationPath .
-          Move-Item -Path chromedriver-win64\chromedriver.exe -Destination .
-          Remove-Item -Path chromedriver.zip, chromedriver-win64 -Recurse
-          # Log versions
-          Write-Host "Chrome version: $chromeVersion"
-          ./chromedriver.exe --version
+          # Install Python 3.9, jq, and Chrome
+          choco install -y python39 jq googlechrome
+          # Refresh PATH for Python
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
           python --version
+          pip install requests beautifulsoup4 selenium
           pip list
+
+          # Get Chrome version
+          $chromeVersion = (Get-Item "C:\Program Files\Google\Chrome\Application\chrome.exe").VersionInfo.ProductVersion
+          Write-Host "Chrome version: $chromeVersion"
+
+          # Try to find matching ChromeDriver version from chrome-for-testing
+          $versionParts = $chromeVersion.Split('.')
+          $majorVersion = $versionParts[0]
+          $response = Invoke-RestMethod -Uri "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
+          $matchingVersion = $response.versions | Where-Object { $_.version -like "$majorVersion.*" } | Select-Object -Last 1 | Select-Object -ExpandProperty version
+          
+          if (-not $matchingVersion) {
+            Write-Host "No matching ChromeDriver version found, falling back to latest stable"
+            $matchingVersion = $response.versions | Select-Object -Last 1 | Select-Object -ExpandProperty version
+          }
+          
+          Write-Host "Selected ChromeDriver version: $matchingVersion"
+          $driverUrl = "https://storage.googleapis.com/chrome-for-testing-public/$matchingVersion/win64/chromedriver-win64.zip"
+          
+          try {
+            Invoke-WebRequest -Uri $driverUrl -OutFile chromedriver.zip
+            Expand-Archive -Path chromedriver.zip -DestinationPath .
+            Move-Item -Path chromedriver-win64\chromedriver.exe -Destination .
+            Remove-Item -Path chromedriver.zip, chromedriver-win64 -Recurse
+          } catch {
+            Write-Host "Failed to download ChromeDriver for version $matchingVersion, trying latest stable"
+            $matchingVersion = $response.versions | Select-Object -Last 1 | Select-Object -ExpandProperty version
+            $driverUrl = "https://storage.googleapis.com/chrome-for-testing-public/$matchingVersion/win64/chromedriver-win64.zip"
+            Invoke-WebRequest -Uri $driverUrl -OutFile chromedriver.zip
+            Expand-Archive -Path chromedriver.zip -DestinationPath .
+            Move-Item -Path chromedriver-win64\chromedriver.exe -Destination .
+            Remove-Item -Path chromedriver.zip, chromedriver-win64 -Recurse
+          }
+
+          # Log ChromeDriver version
+          ./chromedriver.exe --version
 
       - name: Get Gofile server
         id: gofile_server
