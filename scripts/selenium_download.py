@@ -79,6 +79,8 @@ def trigger_1fichier_download(url):
         chrome_options.page_load_strategy = 'eager'
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--headless")  # Run in headless mode for CI/CD environments
+        # Make Chrome less detectable as automation/bot
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -89,6 +91,13 @@ def trigger_1fichier_download(url):
             "download.directory_upgrade": True,
             "safebrowsing.enabled": True
         })
+        # Further reduce automation detection
+        chrome_options.add_argument("--disable-infobars")
+        chrome_options.add_argument("--disable-extensions")
+        chrome_options.add_argument("--profile-directory=Default")
+        chrome_options.add_argument("--disable-plugins-discovery")
+        chrome_options.add_argument("--start-maximized")
+        chrome_options.add_argument("--disable-popup-blocking")
 
         try:
             service = Service('/usr/bin/chromedriver')
