@@ -76,7 +76,7 @@ def trigger_1fichier_download(url):
 
         # Configure Chrome options
         chrome_options = Options()
-        chrome_options.page_load_strategy = 'eager'
+        chrome_options.page_load_strategy = 'normal'
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--headless")  # Run in headless mode for CI/CD environments
