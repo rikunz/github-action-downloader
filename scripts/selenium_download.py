@@ -28,23 +28,30 @@ def trigger_1fichier_download(url):
     print(f"Starting download for URL: {url}")
 
     try:
+        # Create and setup download directory
         download_dir = "/tmp/downloads"
         if not os.path.exists(download_dir):
-            os.makedirs(download_dir, mode=0o777)
+            os.makedirs(download_dir, exist_ok=True)
             logger.info(f"Created download directory: {download_dir}")
             print(f"Created download directory: {download_dir}")
-        if not os.access(download_dir, os.W_OK):
-            logger.error(f"No write permission for {download_dir}")
-            print(f"Error: No write permission for {download_dir}. Please check directory permissions.")
-            return False
+        
+        # Ensure directory has proper permissions
         os.chmod(download_dir, 0o777)
         logger.info(f"Set permissions to 777 for {download_dir}")
         print(f"Set permissions to 777 for {download_dir}")
 
+        # Check directory permissions
+        if not os.access(download_dir, os.W_OK):
+            logger.error(f"No write permission for {download_dir}")
+            print(f"Error: No write permission for {download_dir}. Please check directory permissions.")
+            return False
+
+        # Configure Chrome options
         chrome_options = Options()
         chrome_options.page_load_strategy = 'eager'
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--headless")  # Run in headless mode for server environments
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         chrome_options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
@@ -54,12 +61,14 @@ def trigger_1fichier_download(url):
         })
 
         try:
-            service = Service('/usr/bin/chromedriver', log_path="chromedriver.log")
+            service = Service('/usr/bin/chromedriver')
             logger.info("Attempting to initialize ChromeDriver")
             print("Attempting to initialize ChromeDriver")
             driver = webdriver.Chrome(service=service, options=chrome_options)
             logger.info("Initialized ChromeDriver")
             print("Initialized ChromeDriver")
+            
+            # Take initial screenshot
             try:
                 driver.save_screenshot("initial_screenshot.png")
                 print("Saved initial screenshot to initial_screenshot.png")
@@ -78,48 +87,67 @@ def trigger_1fichier_download(url):
             return False
 
         try:
+            # Navigate to the URL
             print(f"Navigating to {url}")
             logger.info(f"Navigating to {url}")
             driver.get(url)
+            
+            # Wait for page to fully load
+            driver.implicitly_wait(10)
 
+            # Handle cookie notification if present
             print("Waiting for cookie box close button...")
             try:
-                cookie_button = WebDriverWait(driver, 10).until(
+                cookie_button = WebDriverWait(driver, 15).until(
                     EC.element_to_be_clickable((By.CLASS_NAME, "cookie_box_close"))
                 )
                 cookie_button.click()
                 print("Clicked cookie box close button")
                 logger.info("Clicked cookie box close button")
-            except TimeoutException:
-                print("Timeout waiting for cookie box close button. It may not be present.")
-                logger.warning("Timeout waiting for cookie box close button")
-            except NoSuchElementException:
-                print("Cookie box close button not found on page.")
-                logger.warning("Cookie box close button not found")
+            except (TimeoutException, NoSuchElementException):
+                print("Cookie box close button not found or not clickable. Continuing...")
+                logger.warning("Cookie box close button not found or not clickable")
 
+            # Wait for free download button to appear
             print("Waiting for dlb input to be visible and clickable...")
             try:
-                dlb_input = WebDriverWait(driver, 50).until(
-                    EC.visibility_of_element_located((By.ID, "dlb"))
+                # First wait for the element to be present in the DOM
+                WebDriverWait(driver, 30).until(
+                    EC.presence_of_element_located((By.ID, "dlb"))
                 )
-                WebDriverWait(driver, 50).until(
-                    EC.element_to_be_clickable((By.ID, "dlb"))
-                )
+                
+                # Try to find and click the download button using different methods
                 try:
+                    # Method 1: Direct click
+                    dlb_input = driver.find_element(By.ID, "dlb")
                     dlb_input.click()
-                    print("Clicked dlb input")
-                    logger.info("Clicked dlb input")
-                except WebDriverException:
-                    print("Normal click failed, attempting JavaScript click...")
-                    driver.execute_script("arguments[0].click();", dlb_input)
-                    print("Clicked dlb input via JavaScript")
-                    logger.info("Clicked dlb input via JavaScript")
-            except TimeoutException:
-                print("Timeout waiting for dlb input to be visible or clickable.")
-                logger.error("Timeout waiting for dlb input")
+                    print("Clicked dlb input directly")
+                    logger.info("Clicked dlb input directly")
+                except Exception as e:
+                    print(f"Direct click failed: {str(e)}. Trying JavaScript click...")
+                    # Method 2: JavaScript click
+                    try:
+                        driver.execute_script("document.getElementById('dlb').click();")
+                        print("Clicked dlb input via JavaScript getElementById")
+                        logger.info("Clicked dlb input via JavaScript getElementById")
+                    except Exception as e2:
+                        print(f"JavaScript getElementById click failed: {str(e2)}. Final attempt...")
+                        # Method 3: Another JavaScript approach
+                        try:
+                            driver.execute_script("arguments[0].click();", driver.find_element(By.ID, "dlb"))
+                            print("Clicked dlb input via JavaScript arguments[0]")
+                            logger.info("Clicked dlb input via JavaScript arguments[0]")
+                        except Exception as e3:
+                            print(f"All click methods failed: {str(e3)}")
+                            logger.error(f"All click methods failed: {str(e3)}")
+                            raise Exception("Could not click download button after multiple attempts")
+            except (TimeoutException, Exception) as e:
+                print(f"Timeout or error waiting for dlb input: {str(e)}")
+                logger.error(f"Timeout or error waiting for dlb input: {str(e)}")
                 with open("debug_page.html", "w", encoding="utf-8") as f:
                     f.write(driver.page_source)
                 print("Saved page source to debug_page.html for inspection")
+                
                 try:
                     driver.save_screenshot("debug_screenshot.png")
                     print("Saved debug screenshot to debug_screenshot.png")
@@ -129,26 +157,51 @@ def trigger_1fichier_download(url):
                     logger.error(f"Failed to save debug screenshot: {str(e)}")
                 return False
 
+            # Wait for the OK button to appear and click it
             print("Waiting for ok-btn-general input...")
             try:
-                ok_button = WebDriverWait(driver, 20).until(
-                    EC.element_to_be_clickable((By.XPATH, "//input[contains(@class, 'ok-btn-general')]"))
-                )
-                try:
-                    ok_button.click()
-                    print("Clicked ok-btn-general input")
-                    logger.info("Clicked ok-btn-general input")
-                except WebDriverException:
-                    print("Normal click failed, attempting JavaScript click...")
-                    driver.execute_script("arguments[0].click();", ok_button)
-                    print("Clicked ok-btn-general input via JavaScript")
-                    logger.info("Clicked ok-btn-general input via JavaScript")
+                # Try different selectors for the OK button
+                selectors = [
+                    "//input[contains(@class, 'ok-btn-general')]",
+                    "//input[contains(@class, 'ok')]",
+                    "//button[contains(@class, 'ok')]",
+                    "//*[contains(@class, 'ok-btn')]"
+                ]
+                
+                # Try each selector
+                ok_button = None
+                for selector in selectors:
+                    try:
+                        ok_button = WebDriverWait(driver, 10).until(
+                            EC.element_to_be_clickable((By.XPATH, selector))
+                        )
+                        print(f"Found OK button with selector: {selector}")
+                        logger.info(f"Found OK button with selector: {selector}")
+                        break
+                    except:
+                        continue
+                
+                if ok_button:
+                    try:
+                        ok_button.click()
+                        print("Clicked ok button directly")
+                        logger.info("Clicked ok button directly")
+                    except Exception as e:
+                        print(f"Direct click failed: {str(e)}. Trying JavaScript click...")
+                        driver.execute_script("arguments[0].click();", ok_button)
+                        print("Clicked ok button via JavaScript")
+                        logger.info("Clicked ok button via JavaScript")
+                else:
+                    print("Could not find the OK button with any of the selectors")
+                    logger.warning("Could not find the OK button with any of the selectors")
+                    # Continue anyway, as the download might have started
             except TimeoutException:
                 print("Timeout waiting for ok-btn-general input.")
                 logger.error("Timeout waiting for ok-btn-general input")
                 with open("debug_page.html", "w", encoding="utf-8") as f:
                     f.write(driver.page_source)
                 print("Saved page source to debug_page.html for inspection")
+                
                 try:
                     driver.save_screenshot("debug_screenshot.png")
                     print("Saved debug screenshot to debug_screenshot.png")
@@ -156,21 +209,31 @@ def trigger_1fichier_download(url):
                 except Exception as e:
                     print(f"Failed to save debug screenshot: {str(e)}")
                     logger.error(f"Failed to save debug screenshot: {str(e)}")
-                return False
+                # Continue anyway as download might still proceed
 
+            # Wait for download to start
             print("Waiting for download to initiate...")
-            time.sleep(60)
+            time.sleep(30)  # Wait a bit for download to start
+            
+            # Keep browser window open to continue the download
             print(f"Download process initiated successfully. File should be saved to {download_dir}")
             logger.info(f"Download process initiated successfully. File should be saved to {download_dir}")
+            
+            # Check download directory
             print(f"Contents of download directory {download_dir}:")
             dir_contents = os.listdir(download_dir) if os.path.exists(download_dir) else []
             print(dir_contents if dir_contents else "Empty")
             logger.info(f"Download directory contents: {dir_contents if dir_contents else 'Empty'}")
+            
+            # Monitor Chrome processes
             print("Running Chrome processes:")
             os.system("ps aux | grep -E 'chromedriver|chromium' || true")
+            
+            # Save final state
             with open("final_page.html", "w", encoding="utf-8") as f:
                 f.write(driver.page_source)
             print("Saved final page source to final_page.html for inspection")
+            
             try:
                 driver.save_screenshot("final_screenshot.png")
                 print("Saved final screenshot to final_screenshot.png")
@@ -179,17 +242,21 @@ def trigger_1fichier_download(url):
                 print(f"Failed to save final screenshot: {str(e)}")
                 logger.error(f"Failed to save final screenshot: {str(e)}")
 
+            # Return success - leave browser open for downloads to continue
             return True
 
         except WebDriverException as e:
             print(f"Error during page navigation or interaction: {str(e)}")
             logger.error(f"WebDriver error: {str(e)}")
-            print(f"Current page title: {driver.title if 'driver' in locals() else 'Driver not initialized'}")
-            print(f"Current page URL: {driver.current_url if 'driver' in locals() else 'Driver not initialized'}")
+            
             if 'driver' in locals():
+                print(f"Current page title: {driver.title}")
+                print(f"Current page URL: {driver.current_url}")
+                
                 with open("debug_page.html", "w", encoding="utf-8") as f:
                     f.write(driver.page_source)
                 print("Saved page source to debug_page.html for inspection")
+                
                 try:
                     driver.save_screenshot("debug_screenshot.png")
                     print("Saved debug screenshot to debug_screenshot.png")
@@ -200,7 +267,8 @@ def trigger_1fichier_download(url):
             return False
 
         finally:
-            pass  # Tidak menutup browser agar unduhan berlanjut
+            # Don't close the browser so downloads can continue
+            pass
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
