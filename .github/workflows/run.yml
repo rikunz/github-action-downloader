@@ -25,15 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq chromium-browser
-          # Install ChromeDriver matching Chromium version
-          CHROME_VERSION=$(chromium-browser --version | grep -oP '\d+\.\d+\.\d+')
-          wget -N https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION%%.*}
-          CHROMEDRIVER_VERSION=$(cat LATEST_RELEASE_${CHROME_VERSION%%.*})
-          wget -N https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip
-          unzip chromedriver_linux64.zip
-          sudo mv chromedriver /usr/bin/chromedriver
-          sudo chmod +x /usr/bin/chromedriver
+          sudo apt-get install -y jq chromium-browser chromium-chromedriver
           pip install requests beautifulsoup4 selenium
           chromium-browser --version
           chromedriver --version
