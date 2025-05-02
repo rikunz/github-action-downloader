@@ -3,10 +3,10 @@ name: 1fichier Download and Upload to Gofile with Notifications
 on:
   push:
     branches:
-      - fichier
+      - fichier_windows
   pull_request:
     branches:
-      - fichier
+      - fichier_windows
   workflow_dispatch:
 
 permissions:
