@@ -97,7 +97,7 @@ jobs:
           link=$(echo "$first_link" | awk -F'&af=' '{print $1}' | tr -d '\r\n')
 
           echo "Starting download with Selenium..."
-          python scripts/selenium_download.py "$link"
+          python -u scripts/selenium_download.py "$link" 2>&1 | tee selenium_download.log
           selenium_exit_code=$?
 
           if [ $selenium_exit_code -ne 0 ]; then
