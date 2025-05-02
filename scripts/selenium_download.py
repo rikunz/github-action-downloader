@@ -75,7 +75,7 @@ def trigger_1fichier_download(url, download_dir):
         logger.info(f"Set permissions to 777 for {download_dir}")
         print(f"Set permissions to 777 for {download_dir}")
 
-        clean_chrome_processes()
+        # clean_chrome_processes()
 
         chrome_options = Options()
         chrome_options.page_load_strategy = 'eager'
