@@ -76,7 +76,7 @@ def trigger_1fichier_download(url):
 
         # Configure Chrome options
         chrome_options = Options()
-        chrome_options.page_load_strategy = 'eager'
+        chrome_options.page_load_strategy = 'normal'
         chrome_options.add_argument("--headless")  # Uncomment for headless mode
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
