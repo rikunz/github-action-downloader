@@ -3,10 +3,10 @@ name: 1fichier Download and Upload to Gofile with Notifications
 on:
   push:
     branches:
-      - fichier_windows
+      - fichier
   pull_request:
     branches:
-      - fichier_windows
+      - fichier
   workflow_dispatch:
 
 permissions:
@@ -127,7 +127,7 @@ jobs:
           Write-Host "Created download directory: $downloadDir"
           Get-Item $downloadDir | Format-List -Property *
 
-          $startTime = (Get-Date -AsUTC).ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $startTime = [System.DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
           $startPayload = @{
             embeds = @(
               @{
@@ -231,7 +231,7 @@ jobs:
           if ($gofileResponse | ConvertFrom-Json | Select-Object -ExpandProperty status -eq "ok") {
             $gofileUrl = $gofileResponse | ConvertFrom-Json | Select-Object -ExpandProperty data | Select-Object -ExpandProperty downloadPage
             $fileInfo = "- $completedBasename ($([math]::Round($size / 1MB, 2)) MB)"
-            $uploadTime = (Get-Date -AsUTC).ToString("yyyy-MM-ddTHH:mm:ssZ")
+            $uploadTime = [System.DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
             $uploadPayload = @{
               embeds = @(
                 @{
