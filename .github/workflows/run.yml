@@ -189,7 +189,7 @@ jobs:
                     if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
                     gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
                     # List all files in downloads directory
-                    file_list=$(ls -1 downloads | sed 's/^/- /')
+                    file_list=$(ls -1 @$temp_dir | sed 's/^/- /')
                     # Send success notification
                     upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
                     upload_payload=$(jq -n \
