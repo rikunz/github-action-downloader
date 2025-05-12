@@ -71,7 +71,7 @@ jobs:
         run: |
           if [ ! -f mega_download_list.txt ]; then
             echo "No mega_download_list.txt found, exiting"
-            exit 0
+            exit  Barring any unforeseen issues, this should resolve the empty file list problem. If you encounter other issues or need further refinements (e.g., additional debugging or handling specific edge cases), let me know!0
           fi
 
           first_link=$(head -n 1 mega_download_list.txt)
@@ -113,6 +113,15 @@ jobs:
               }')
             curl -X POST -H "Content-Type: application/json" -d "$error_payload" "$DISCORD_WEBHOOK_URL"
           else
+            # Generate file_list before uploading and deleting files
+            file_list=""
+            for file in downloads/*; do
+              if [ -f "$file" ]; then
+                file_list="${file_list}• $(basename "$file")\n"
+              fi
+            done
+            file_list=${file_list%\\n}  # Remove trailing newline
+
             gofile_urls=()
             for file in downloads/*; do
               if [ -f "$file" ]; then
@@ -125,19 +134,13 @@ jobs:
                   echo "Failed to upload $file"
                   success=false
                 fi
-                rm -f "$file"
+                rm -f "$file"  # Delete file after upload
               fi
             done
 
             if [ "$success" = true ] && [ ${#gofile_urls[@]} -gt 0 ]; then
               for url in "${gofile_urls[@]}"; do
                 upload_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-                file_list=""
-                for file in downloads/*; do
-                  [ -f "$file" ] && file_list="${file_list}• $(basename "$file")\n"
-                done
-                file_list=${file_list%\\n}
-
                 upload_payload=$(jq -n \
                   --arg url "$url" \
                   --arg link "$first_link" \
