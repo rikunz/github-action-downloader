@@ -51,7 +51,7 @@ jobs:
           server="store1"
 
           if echo "$response" | jq -e '.data.serversAllZone' > /dev/null 2>&1; then
-            for zone in $(echo $preferred_zones | jq -r '.[]'); do
+            for zone in $(echo "$preferred_zones" | jq -r '.[]'); do
               candidate=$(echo "$response" | jq -r --arg zone "$zone" '.data.serversAllZone[] | select(.zone == $zone) | .name' | head -n 1)
               if [ -n "$candidate" ]; then
                 server="$candidate"
@@ -71,7 +71,7 @@ jobs:
         run: |
           if [ ! -f mega_download_list.txt ]; then
             echo "No mega_download_list.txt found, exiting"
-            exit  Barring any unforeseen issues, this should resolve the empty file list problem. If you encounter other issues or need further refinements (e.g., additional debugging or handling specific edge cases), let me know!0
+            exit 0
           fi
 
           first_link=$(head -n 1 mega_download_list.txt)
@@ -121,12 +121,15 @@ jobs:
               fi
             done
             file_list=${file_list%\\n}  # Remove trailing newline
+            if [ -z "$file_list" ]; then
+              file_list="No files downloaded"
+            fi
 
             gofile_urls=()
             for file in downloads/*; do
               if [ -f "$file" ]; then
                 echo "Uploading $file to Gofile"
-                gofile_response=$(curl -s -F "file=@$file" https://${{ env.server }}.gofile.io/uploadFile)
+                gofile_response=$(curl -s -F "file=@$file" "https://${{ env.server }}.gofile.io/uploadFile")
                 if echo "$gofile_response" | jq -e '.status == "ok"' > /dev/null; then
                   gofile_url=$(echo "$gofile_response" | jq -r '.data.downloadPage')
                   gofile_urls+=("$gofile_url")
